@@ -21,7 +21,7 @@
     "name_missing",
     "address_missing"
   ],
-  "training_date": "2026-09-25T14:58:37.847505",
+  "training_date": "2026-09-25T17:46:23.255200",
   "dataset_version": "1.0",
   "random_seed": 42,
   "hyperparameters": {
