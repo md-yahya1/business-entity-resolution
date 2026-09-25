@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.pytest_cache/
+
+# Dataset & Large Files
+dataset/
+*.parquet
+*.tsv
+*.log
+
+# Models & Artifacts (keep metadata, ignore binary model if large, or allow models/)
+# artifacts/

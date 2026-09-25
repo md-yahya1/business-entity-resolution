@@ -1,0 +1,74 @@
+{
+  "model_type": "GradientBoosting",
+  "feature_names": [
+    "name_ratio",
+    "name_partial_ratio",
+    "name_token_sort_ratio",
+    "name_token_set_ratio",
+    "name_jw_similarity",
+    "address_ratio",
+    "address_partial_ratio",
+    "address_token_set_ratio",
+    "address_jw_similarity",
+    "country_exact_match",
+    "country_missing",
+    "name_exact_match",
+    "address_exact_match",
+    "name_token_overlap",
+    "address_token_overlap",
+    "name_char_len_diff",
+    "address_char_len_diff",
+    "name_missing",
+    "address_missing"
+  ],
+  "training_date": "2026-09-25T14:58:37.847505",
+  "dataset_version": "1.0",
+  "random_seed": 42,
+  "hyperparameters": {
+    "ccp_alpha": 0.0,
+    "criterion": "friedman_mse",
+    "init": null,
+    "learning_rate": 0.1,
+    "loss": "log_loss",
+    "max_depth": 5,
+    "max_features": null,
+    "max_leaf_nodes": null,
+    "min_impurity_decrease": 0.0,
+    "min_samples_leaf": 1,
+    "min_samples_split": 2,
+    "min_weight_fraction_leaf": 0.0,
+    "n_estimators": 100,
+    "n_iter_no_change": null,
+    "random_state": 42,
+    "subsample": 1.0,
+    "tol": 0.0001,
+    "validation_fraction": 0.1,
+    "verbose": 0,
+    "warm_start": false
+  },
+  "metrics": {
+    "precision": 0.9964209019327129,
+    "recall": 0.992867332382311,
+    "f1_score": 0.9946409431939979,
+    "accuracy": 0.9938625204582652,
+    "confusion_matrix": [
+      [
+        2074,
+        10
+      ],
+      [
+        20,
+        2784
+      ]
+    ],
+    "roc_auc": 0.9998391384942267,
+    "pr_auc": 0.9998815951194054
+  },
+  "decision_threshold": 0.72,
+  "software_versions": {
+    "scikit-learn": "1.8.0",
+    "pandas": "2.2.3",
+    "numpy": "1.26.4",
+    "joblib": "1.5.3"
+  }
+}
