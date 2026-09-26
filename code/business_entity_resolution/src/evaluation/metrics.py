@@ -43,18 +43,10 @@ def _score_at_threshold(
     thresh: float,
     target_metric: str,
 ) -> Tuple[float, Dict[str, float]]:
-    preds = y_prob >= thresh
-    y_bool = (y_true == 1)
-    tp = int(np.count_nonzero(y_bool & preds))
-    fp = int(np.count_nonzero(~y_bool & preds))
-    fn = int(np.count_nonzero(y_bool & ~preds))
-
-    tp_fp = tp + fp
-    tp_fn = tp + fn
-    score_p = float(tp / tp_fp) if tp_fp > 0 else 0.0
-    score_r = float(tp / tp_fn) if tp_fn > 0 else 0.0
-    denom_f1 = 2 * tp + fp + fn
-    score_f1 = float(2 * tp / denom_f1) if denom_f1 > 0 else 0.0
+    preds = (y_prob >= thresh).astype(int)
+    score_p = float(precision_score(y_true, preds, zero_division=0))
+    score_r = float(recall_score(y_true, preds, zero_division=0))
+    score_f1 = float(f1_score(y_true, preds, zero_division=0))
     score_f05 = float(pairwise_f_beta(score_p, score_r, beta=0.5))
 
     if target_metric == "f0_5":
