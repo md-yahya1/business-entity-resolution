@@ -1,7 +1,7 @@
 """
 Evaluation metrics module for Entity Resolution model training.
 """
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Iterable
 import numpy as np
 from sklearn.metrics import (
     precision_score,
@@ -13,6 +13,68 @@ from sklearn.metrics import (
     confusion_matrix,
     precision_recall_curve,
 )
+
+
+def pairwise_f_beta(precision: float, recall: float, beta: float = 0.5) -> float:
+    """Pairwise F-beta with beta < 1 emphasizing precision (competition uses 0.5)."""
+    beta_sq = beta * beta
+    denom = beta_sq * precision + recall
+    if denom == 0.0:
+        return 0.0
+    return (1.0 + beta_sq) * precision * recall / denom
+
+
+def _threshold_candidates(y_true: np.ndarray, y_prob: np.ndarray, center: float = None) -> np.ndarray:
+    coarse = np.linspace(0.02, 0.98, 193)
+    candidates = set(float(t) for t in coarse)
+    _, _, pr_thresholds = precision_recall_curve(y_true, y_prob)
+    candidates.update(float(t) for t in pr_thresholds if 0.01 <= float(t) <= 0.99)
+
+    if center is not None:
+        fine = np.linspace(max(0.005, center - 0.08), min(0.995, center + 0.08), 161)
+        candidates.update(float(t) for t in fine)
+
+    return np.array(sorted(candidates), dtype=float)
+
+
+def _score_at_threshold(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    thresh: float,
+    target_metric: str,
+) -> Tuple[float, Dict[str, float]]:
+    preds = y_prob >= thresh
+    y_bool = (y_true == 1)
+    tp = int(np.count_nonzero(y_bool & preds))
+    fp = int(np.count_nonzero(~y_bool & preds))
+    fn = int(np.count_nonzero(y_bool & ~preds))
+
+    tp_fp = tp + fp
+    tp_fn = tp + fn
+    score_p = float(tp / tp_fp) if tp_fp > 0 else 0.0
+    score_r = float(tp / tp_fn) if tp_fn > 0 else 0.0
+    denom_f1 = 2 * tp + fp + fn
+    score_f1 = float(2 * tp / denom_f1) if denom_f1 > 0 else 0.0
+    score_f05 = float(pairwise_f_beta(score_p, score_r, beta=0.5))
+
+    if target_metric == "f0_5":
+        current_score = score_f05
+    elif target_metric == "precision":
+        current_score = score_p
+    elif target_metric == "composite":
+        current_score = 0.55 * score_f05 + 0.45 * score_f1
+    else:
+        current_score = score_f1
+
+    metrics = {
+        "threshold": float(thresh),
+        "precision": score_p,
+        "recall": score_r,
+        "f1_score": score_f1,
+        "f0_5": score_f05,
+        "objective": float(current_score),
+    }
+    return current_score, metrics
 
 
 def evaluate_predictions(
@@ -34,6 +96,7 @@ def evaluate_predictions(
         "precision": prec,
         "recall": rec,
         "f1_score": f1,
+        "f0_5": float(pairwise_f_beta(prec, rec, beta=0.5)),
         "accuracy": acc,
         "confusion_matrix": cm,
     }
@@ -51,32 +114,44 @@ def evaluate_predictions(
 def find_optimal_threshold(
     y_true: np.ndarray,
     y_prob: np.ndarray,
-    target_metric: str = "f1"
+    target_metric: str = "f0_5",
+    fine_refine: bool = True,
 ) -> Tuple[float, Dict[str, float]]:
     """
-    Find optimal decision threshold on validation set to maximize F1-score or target metric.
+    Find decision threshold maximizing pairwise F0.5, F1, precision, or a composite.
+    Uses PR-curve thresholds plus a two-pass fine grid around the best point.
     """
-    precisions, recalls, thresholds = precision_recall_curve(y_true, y_prob)
-
     best_thresh = 0.5
     best_score = -1.0
-    best_metrics = {}
+    best_metrics: Dict[str, float] = {}
 
-    for thresh in np.linspace(0.05, 0.95, 91):
-        preds = (y_prob >= thresh).astype(int)
-        score_f1 = f1_score(y_true, preds, zero_division=0)
-        score_p = precision_score(y_true, preds, zero_division=0)
-        score_r = recall_score(y_true, preds, zero_division=0)
-
-        current_score = score_f1 if target_metric == "f1" else score_p
+    for thresh in _threshold_candidates(y_true, y_prob):
+        current_score, metrics = _score_at_threshold(y_true, y_prob, thresh, target_metric)
         if current_score > best_score:
             best_score = current_score
             best_thresh = float(thresh)
-            best_metrics = {
-                "threshold": float(thresh),
-                "precision": float(score_p),
-                "recall": float(score_r),
-                "f1_score": float(score_f1),
-            }
+            best_metrics = metrics
+
+    if fine_refine:
+        for thresh in _threshold_candidates(y_true, y_prob, center=best_thresh):
+            current_score, metrics = _score_at_threshold(y_true, y_prob, thresh, target_metric)
+            if current_score > best_score:
+                best_score = current_score
+                best_thresh = float(thresh)
+                best_metrics = metrics
 
     return best_thresh, best_metrics
+
+
+def model_selection_score(
+    val_threshold_metrics: Dict[str, float],
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+) -> float:
+    """
+    Rank models on validation: prioritize F0.5, then F1 and ranking quality (ROC-AUC).
+    """
+    roc = float(roc_auc_score(y_true, y_prob)) if len(np.unique(y_true)) > 1 else 0.0
+    f05 = val_threshold_metrics.get("f0_5", val_threshold_metrics["f1_score"])
+    f1 = val_threshold_metrics["f1_score"]
+    return 0.50 * f05 + 0.30 * f1 + 0.20 * roc

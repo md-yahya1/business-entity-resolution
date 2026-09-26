@@ -20,6 +20,7 @@ from business_entity_resolution.src.models import (
     split_data_by_group,
     train_and_evaluate_models,
     save_model_artifacts,
+    get_model_hyperparams,
 )
 
 
@@ -54,6 +55,13 @@ def main():
         type=int,
         default=42,
         help="Random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--tuning-profile",
+        type=str,
+        default="fast",
+        choices=("full", "fast"),
+        help="fast = core ensembles (default); full = all stacks including extended weight tuning",
     )
 
     args = parser.parse_args()
@@ -136,16 +144,22 @@ def main():
     print(f"Validation size: {len(split_data['X_val'])}")
     print(f"Test size: {len(split_data['X_test'])}")
 
-    print("\nTraining and evaluating baseline models...")
-    eval_results = train_and_evaluate_models(split_data, random_seed=args.random_seed)
+    print(f"\nTraining with tuning profile: {args.tuning_profile}")
+    print("Training and evaluating base learners and ensemble models...")
+    eval_results = train_and_evaluate_models(
+        split_data,
+        random_seed=args.random_seed,
+        tuning_profile=args.tuning_profile,
+    )
 
     print("\n--- MODEL COMPARISON SUMMARY ---")
     for name, res in eval_results["all_model_results"].items():
         v_def = res["val_default_metrics"]
         v_opt = res["val_optimal_metrics"]
         print(f"Model: {name}")
-        print(f"  Validation (thresh 0.5): F1={v_def['f1_score']:.4f}, Prec={v_def['precision']:.4f}, Rec={v_def['recall']:.4f}")
-        print(f"  Validation (thresh {res['optimal_threshold']:.2f}): F1={v_opt['f1_score']:.4f}, Prec={v_opt['precision']:.4f}, Rec={v_opt['recall']:.4f}")
+        sel = res.get("selection_score", 0.0)
+        print(f"  Validation (thresh 0.5): F0.5={v_def.get('f0_5', 0):.4f}, F1={v_def['f1_score']:.4f}, Prec={v_def['precision']:.4f}, Rec={v_def['recall']:.4f}")
+        print(f"  Validation (thresh {res['optimal_threshold']:.3f}): F0.5={v_opt.get('f0_5', 0):.4f}, F1={v_opt['f1_score']:.4f}, Prec={v_opt['precision']:.4f}, Rec={v_opt['recall']:.4f}, select={sel:.4f}")
 
     best_name = eval_results["best_model_name"]
     best_model = eval_results["best_model"]
@@ -159,6 +173,7 @@ def main():
     print(f"Accuracy:  {test_metrics['accuracy']:.4f}")
     print(f"Precision: {test_metrics['precision']:.4f}")
     print(f"Recall:    {test_metrics['recall']:.4f}")
+    print(f"F0.5:      {test_metrics.get('f0_5', 0):.4f}")
     print(f"F1-Score:  {test_metrics['f1_score']:.4f}")
     print(f"ROC-AUC:   {test_metrics['roc_auc']:.4f}" if test_metrics['roc_auc'] else "ROC-AUC: N/A")
     print(f"PR-AUC:    {test_metrics['pr_auc']:.4f}" if test_metrics['pr_auc'] else "PR-AUC: N/A")
@@ -170,7 +185,7 @@ def main():
         model_obj=best_model,
         model_name=best_name,
         feature_names=FEATURE_NAMES,
-        hyperparams=best_model.get_params(),
+        hyperparams=get_model_hyperparams(best_model),
         metrics=test_metrics,
         decision_thresh=best_thresh,
         output_dir=output_dir,

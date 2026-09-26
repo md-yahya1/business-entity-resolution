@@ -10,17 +10,14 @@ import pandas as pd
 import numpy as np
 
 from sklearn.model_selection import GroupShuffleSplit
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import (
-    RandomForestClassifier,
-    GradientBoostingClassifier,
-    HistGradientBoostingClassifier,
-    ExtraTreesClassifier,
-    VotingClassifier,
-)
 
 from ..features import extract_features_dataframe, FEATURE_NAMES
-from ..evaluation.metrics import evaluate_predictions, find_optimal_threshold
+from ..evaluation.metrics import (
+    evaluate_predictions,
+    find_optimal_threshold,
+    model_selection_score,
+)
+from .ensemble import build_candidate_models, is_weight_tuned_ensemble
 
 
 def split_data_by_group(
@@ -38,14 +35,12 @@ def split_data_by_group(
     y = df["label"].values
     X = features_df.values
 
-    # First split into train_val and test
     gss_test = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
     train_val_idx, test_idx = next(gss_test.split(X, y, groups=groups))
 
     X_train_val, y_train_val, groups_train_val = X[train_val_idx], y[train_val_idx], groups[train_val_idx]
     X_test, y_test, groups_test = X[test_idx], y[test_idx], groups[test_idx]
 
-    # Next split train_val into train and val
     relative_val_size = val_size / (1.0 - test_size)
     gss_val = GroupShuffleSplit(n_splits=1, test_size=relative_val_size, random_state=random_state)
     train_idx, val_idx = next(gss_val.split(X_train_val, y_train_val, groups=groups_train_val))
@@ -61,74 +56,91 @@ def split_data_by_group(
     }
 
 
+def _fit_model(
+    model: Any,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    random_seed: int,
+) -> None:
+    model.fit(X_train, y_train)
+    if is_weight_tuned_ensemble(model):
+        model.tune_weights(X_val, y_val, target_metric="f0_5", random_state=random_seed)
+
+
+def _json_safe_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe_value(v) for k, v in value.items()}
+    if hasattr(value, "get_params"):
+        return {
+            "class": type(value).__name__,
+            "params": _json_safe_value(value.get_params(deep=False)),
+        }
+    return repr(value)
+
+
+def get_model_hyperparams(model: Any) -> Dict[str, Any]:
+    params = _json_safe_value(model.get_params(deep=False))
+    if is_weight_tuned_ensemble(model) and hasattr(model, "weights_"):
+        params["tuned_weights"] = model.weights_.tolist()
+    return params
+
+
 def train_and_evaluate_models(
     split_data: Dict[str, Any],
-    random_seed: int = 42
+    random_seed: int = 42,
+    tuning_profile: str = "fast",
 ) -> Dict[str, Any]:
     """
-    Train and compare baseline models (Logistic Regression, Random Forest, Gradient Boosting, Soft Voting Ensemble).
+    Train and compare base learners plus ensemble compositions; select by validation F0.5 composite score.
     """
     X_train, y_train = split_data["X_train"], split_data["y_train"]
     X_val, y_val = split_data["X_val"], split_data["y_val"]
     X_test, y_test = split_data["X_test"], split_data["y_test"]
 
-    hgb = HistGradientBoostingClassifier(
-        max_iter=300, max_depth=10, learning_rate=0.07, random_state=random_seed
-    )
-    et = ExtraTreesClassifier(
-        n_estimators=175, max_depth=16, random_state=random_seed, class_weight="balanced", n_jobs=-1
-    )
-    rf = RandomForestClassifier(
-        n_estimators=175, max_depth=16, random_state=random_seed, class_weight="balanced", n_jobs=-1
-    )
-
-    candidate_models = {
-        "SoftVotingEnsemble": VotingClassifier(
-            estimators=[("hist", hgb), ("extra", et), ("rf", rf)],
-            voting="soft",
-            weights=[0.50, 0.30, 0.20],
-            n_jobs=-1
-        ),
-        "HistGradientBoosting": hgb,
-        "ExtraTrees": et,
-        "RandomForest": rf,
-        "GradientBoosting": GradientBoostingClassifier(
-            n_estimators=100, max_depth=6, learning_rate=0.1, random_state=random_seed
-        ),
-        "LogisticRegression": LogisticRegression(
-            max_iter=1000, random_state=random_seed, class_weight="balanced"
-        ),
-    }
+    candidate_models = build_candidate_models(random_seed, profile=tuning_profile)
 
     model_results = {}
     best_model_name = None
-    best_val_f1 = -1.0
+    best_val_score = -1.0
     best_model_obj = None
 
     for name, model in candidate_models.items():
-        model.fit(X_train, y_train)
+        _fit_model(model, X_train, y_train, X_val, y_val, random_seed)
 
-        # Validation prediction
         val_probs = model.predict_proba(X_val)[:, 1]
         val_preds_default = (val_probs >= 0.5).astype(int)
         val_metrics_default = evaluate_predictions(y_val, val_preds_default, val_probs)
 
-        # Threshold tuning on validation set
-        opt_thresh, opt_metrics = find_optimal_threshold(y_val, val_probs, target_metric="f1")
+        opt_thresh, opt_metrics = find_optimal_threshold(
+            y_val, val_probs, target_metric="f0_5", fine_refine=True
+        )
+        selection_score = model_selection_score(opt_metrics, y_val, val_probs)
 
         model_results[name] = {
             "model_object": model,
             "val_default_metrics": val_metrics_default,
             "optimal_threshold": opt_thresh,
             "val_optimal_metrics": opt_metrics,
+            "selection_score": selection_score,
         }
 
-        if opt_metrics["f1_score"] > best_val_f1:
-            best_val_f1 = opt_metrics["f1_score"]
+        if selection_score > best_val_score:
+            best_val_score = selection_score
             best_model_name = name
             best_model_obj = model
 
-    # Final evaluation of best model on Test Set
     best_result = model_results[best_model_name]
     best_thresh = best_result["optimal_threshold"]
 

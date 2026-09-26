@@ -11,6 +11,8 @@ from business_entity_resolution.src.models import (
     split_data_by_group,
     train_and_evaluate_models,
     save_model_artifacts,
+    get_model_hyperparams,
+    build_candidate_models,
 )
 
 
@@ -32,7 +34,9 @@ def test_end_to_end_training_and_saving(tmp_path):
     assert len(split_data["X_val"]) > 0
     assert len(split_data["X_test"]) > 0
 
-    eval_results = train_and_evaluate_models(split_data, random_seed=42)
+    eval_results = train_and_evaluate_models(
+        split_data, random_seed=42, tuning_profile="minimal"
+    )
 
     assert eval_results["best_model"] is not None
     assert 0.0 <= eval_results["optimal_threshold"] <= 1.0
@@ -44,7 +48,7 @@ def test_end_to_end_training_and_saving(tmp_path):
         model_obj=eval_results["best_model"],
         model_name=eval_results["best_model_name"],
         feature_names=FEATURE_NAMES,
-        hyperparams=eval_results["best_model"].get_params(),
+        hyperparams=get_model_hyperparams(eval_results["best_model"]),
         metrics=eval_results["test_metrics"],
         decision_thresh=eval_results["optimal_threshold"],
         output_dir=out_dir

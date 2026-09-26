@@ -32,7 +32,7 @@ This objective differs from the entity-level competition score. A strong pairwis
 
 ## Checked-In Model Snapshot
 
-Current GitHub `main` metadata identifies a `HistGradientBoosting` model with `max_iter=250`, `max_depth=8`, `learning_rate=0.08`, and `random_state=42`. Its stored decision threshold is `0.62`. The current trainer compares HistGradientBoosting, Extra Trees, Random Forest, Gradient Boosting, and Logistic Regression, choosing by validation pairwise F1.
+Current GitHub `main` metadata identifies a `HistGradientBoosting` model with `max_iter=250`, `max_depth=8`, `learning_rate=0.08`, and `random_state=42`. Its stored decision threshold is `0.62`. The trainer compares six base learners plus soft voting, stacking, and validation-tuned weighted ensembles. Model selection uses a validation composite (50% pairwise F0.5, 30% F1, 20% ROC-AUC) with a fine-grained threshold sweep. Use `python scripts/train.py --tuning-profile full` for every ensemble; `fast` skips the heaviest stacks for quicker iteration.
 
 The metadata reports these pairwise test metrics:
 
