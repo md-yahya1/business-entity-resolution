@@ -11,7 +11,7 @@ import numpy as np
 
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, HistGradientBoostingClassifier, ExtraTreesClassifier
 
 from ..features import extract_features_dataframe, FEATURE_NAMES
 from ..evaluation.metrics import evaluate_predictions, find_optimal_threshold
@@ -67,14 +67,20 @@ def train_and_evaluate_models(
     X_test, y_test = split_data["X_test"], split_data["y_test"]
 
     candidate_models = {
-        "LogisticRegression": LogisticRegression(
-            max_iter=1000, random_state=random_seed, class_weight="balanced"
+        "HistGradientBoosting": HistGradientBoostingClassifier(
+            max_iter=250, max_depth=8, learning_rate=0.08, random_state=random_seed
+        ),
+        "ExtraTrees": ExtraTreesClassifier(
+            n_estimators=150, max_depth=14, random_state=random_seed, class_weight="balanced", n_jobs=-1
         ),
         "RandomForest": RandomForestClassifier(
-            n_estimators=100, max_depth=12, random_state=random_seed, class_weight="balanced"
+            n_estimators=150, max_depth=14, random_state=random_seed, class_weight="balanced", n_jobs=-1
         ),
         "GradientBoosting": GradientBoostingClassifier(
-            n_estimators=100, max_depth=5, learning_rate=0.1, random_state=random_seed
+            n_estimators=100, max_depth=6, learning_rate=0.1, random_state=random_seed
+        ),
+        "LogisticRegression": LogisticRegression(
+            max_iter=1000, random_state=random_seed, class_weight="balanced"
         ),
     }
 
