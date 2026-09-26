@@ -140,3 +140,75 @@ def generate_candidate_pairs(
         })
 
     return pd.DataFrame(records)
+
+
+def generate_test_candidates(
+    s1_df: pd.DataFrame,
+    s2_df: pd.DataFrame,
+    s3_df: pd.DataFrame,
+    max_candidates_per_s1: int = 15
+) -> pd.DataFrame:
+    """
+    Generate candidate pairs for all S1 entities against S2/S3 using fast multi-pass blocking keys (country + first token).
+    """
+    blocks: Dict[Tuple[str, str], List[Dict[str, str]]] = {}
+
+    for s_df in [s2_df, s3_df]:
+        for row in s_df.itertuples(index=False):
+            eid = getattr(row, "entity_id", "")
+            bname = str(getattr(row, "business_name", ""))
+            addr = str(getattr(row, "business_address", ""))
+            c_raw = getattr(row, "country", "")
+            country = normalize_country(str(c_raw))
+
+            norm_name = normalize_business_name(bname)
+            tokens = norm_name.split()
+            first_token = tokens[0] if tokens else ""
+
+            if country and first_token:
+                key = (country, first_token)
+                if key not in blocks:
+                    blocks[key] = []
+                blocks[key].append({
+                    "entity_id": eid,
+                    "business_name": bname,
+                    "business_address": addr,
+                    "country": c_raw,
+                    "norm_name": norm_name
+                })
+
+    pairs = []
+    for row in s1_df.itertuples(index=False):
+        s1_id = getattr(row, "entity_id", "")
+        s1_name = str(getattr(row, "business_name", ""))
+        s1_addr = str(getattr(row, "business_address", ""))
+        s1_country_raw = getattr(row, "country", "")
+        s1_c = normalize_country(str(s1_country_raw))
+
+        s1_norm = normalize_business_name(s1_name)
+        tokens = s1_norm.split()
+        first_token = tokens[0] if tokens else ""
+
+        key = (s1_c, first_token)
+        candidates = blocks.get(key, [])
+
+        count = 0
+        for cand in candidates:
+            pairs.append({
+                "entity_id_1": s1_id,
+                "business_name_1": s1_name,
+                "business_address_1": s1_addr,
+                "country_1": s1_country_raw,
+                "entity_id_2": cand["entity_id"],
+                "business_name_2": cand["business_name"],
+                "business_address_2": cand["business_address"],
+                "country_2": cand["country"],
+                "label": 0,
+                "entity_group_id": 0
+            })
+            count += 1
+            if count >= max_candidates_per_s1:
+                break
+
+    return pd.DataFrame(pairs)
+
