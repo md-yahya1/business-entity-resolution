@@ -114,7 +114,7 @@ class FastCandidateIndex:
         country: str,
         name: str,
         address: str,
-        top_k: int = 25,
+        top_k: int = 50,
     ) -> List[int]:
         """Retrieve candidate integer indices for a single S1 record."""
         if not country:
