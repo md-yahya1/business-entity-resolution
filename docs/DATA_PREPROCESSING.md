@@ -1,277 +1,63 @@
-You are responsible for designing and implementing the DATA PREPROCESSING stage of a machine-learning Entity Resolution project.
-
-PROJECT:
-Business Entity Resolution
-
-OBJECTIVE:
-We have raw business/entity records that may contain duplicate or slightly different representations of the same real-world business. The downstream pipeline will perform candidate generation, feature engineering, and model-based matching.
-
-Your task is ONLY to handle the data preprocessing stage.
-
-IMPORTANT:
-Do not implement candidate generation or model training unless required to make the preprocessing pipeline testable.
-
-==================================================
-GOALS
-==================================================
-
-1. Inspect the available raw dataset and understand:
-   - File formats
-   - Columns
-   - Data types
-   - Missing values
-   - Duplicate records
-   - Unique identifiers
-   - Text fields
-   - Numerical fields
-   - Categorical fields
-   - Address/contact/business information
-   - Training labels, if present
-
-2. Determine which columns are:
-   - Entity identifiers
-   - Business names
-   - Addresses
-   - Cities
-   - States
-   - Countries
-   - Postal codes
-   - Phone numbers
-   - Email addresses
-   - URLs
-   - Other useful entity attributes
-
-3. Design a reproducible preprocessing pipeline.
-
-==================================================
-PREPROCESSING REQUIREMENTS
-==================================================
-
-Implement preprocessing for relevant fields.
-
-For textual fields consider:
-
-- Unicode normalization
-- Lowercasing
-- Whitespace normalization
-- Punctuation normalization
-- Removal of unnecessary special characters
-- Standardization of common separators
-- Handling of accents/diacritics
-- Safe handling of null values
-- Consistent string conversion
-
-For business names consider:
-
-- Case normalization
-- Legal suffix normalization where appropriate
-- Common abbreviation handling where justified
-- Removal of unnecessary punctuation
-- Whitespace normalization
-
-Examples of potentially equivalent forms:
-
-"ABC Pvt. Ltd."
-"ABC PRIVATE LIMITED"
-"abc pvt ltd"
-
-However, DO NOT aggressively normalize information if doing so can merge genuinely different entities.
-
-For addresses consider:
-
-- Case normalization
-- Unicode normalization
-- Whitespace normalization
-- Standardization of punctuation
-- Component-wise processing where possible
-
-For phone numbers:
-
-- Remove formatting characters where appropriate
-- Normalize country codes if the dataset permits
-- Preserve enough information for downstream matching
-
-For email:
-
-- Lowercase where appropriate
-- Trim whitespace
-- Preserve the semantic structure
-- Do not make provider-specific assumptions unless justified
-
-For URLs:
-
-- Normalize scheme/case where appropriate
-- Remove irrelevant formatting differences
-- Preserve meaningful domain information
-
-==================================================
-DATA QUALITY
-==================================================
-
-Create a data-quality analysis that reports:
-
-- Number of rows
-- Number of columns
-- Missing values per column
-- Duplicate rows
-- Unique values
-- Data types
-- Invalid/malformed values
-- Potentially suspicious records
-
-Do NOT silently delete records.
-
-Any row filtering must be explicitly documented and justified.
-
-==================================================
-DATA LEAKAGE
-==================================================
-
-Pay special attention to preventing data leakage.
-
-Do not use:
-
-- Target labels as input features
-- Future information
-- Test-set information when creating training transformations
-- Information derived from the evaluation set to modify training preprocessing
-
-If preprocessing requires fitted transformations, fit them only on the appropriate training data and reuse them during inference.
-
-==================================================
-OUTPUT
-==================================================
-
-Create a deterministic preprocessing script.
-
-Prefer:
-
-scripts/preprocess.py
-
-The script should:
-
-1. Load raw data
-2. Validate required columns
-3. Normalize data
-4. Handle missing values
-5. Perform required transformations
-6. Save processed data
-7. Produce a preprocessing/data-quality report
-8. Fail with a clear error if required input data is missing
-
-Avoid hardcoded absolute paths such as:
-
-C:\Users\...
-
-Use configurable relative paths or command-line arguments.
-
-Example:
-
-python scripts/preprocess.py \
-    --input dataset/raw/train.tsv \
-    --output artifacts/processed/train_processed.parquet
-
-==================================================
-REPRODUCIBILITY
-==================================================
-
-The preprocessing process must be deterministic.
-
-Document:
-
-- Input files
-- Input schema
-- Transformations
-- Output schema
-- Removed/retained columns
-- Missing-value handling
-- Normalization rules
-- Any assumptions
-
-==================================================
-TESTING
-==================================================
-
-Create tests for important preprocessing behavior.
-
-At minimum test:
-
-- Null values
-- Unicode normalization
-- Case normalization
-- Whitespace normalization
-- Duplicate handling
-- Phone normalization
-- Email normalization
-- Address normalization
-- Required-column validation
-
-==================================================
-DOCUMENTATION
-==================================================
-
-Create:
-
-docs/DATA_PREPROCESSING.md
-
-The documentation must be written so that:
-
-1. A new developer can understand the preprocessing stage without reading the entire repository.
-2. An LLM can easily parse the document and understand the pipeline.
-3. Every input and output is explicitly documented.
-4. Every transformation has a reason.
-5. The document contains no vague statements.
-
-Use clear Markdown headings.
-
-Required structure:
-
 # Data Preprocessing
 
-## 1. Purpose
+## Purpose
 
-## 2. Input Data
+Normalize business names, addresses, and countries before blocking and pair-feature extraction. The implementation is `code/business_entity_resolution/src/preprocessing.py`.
 
-## 3. Input Schema
+## Inputs and Schema
 
-## 4. Data Quality Analysis
+`preprocess_dataframe` accepts a pandas DataFrame and requires:
 
-## 5. Preprocessing Pipeline
+| Column | Meaning |
+|---|---|
+| `entity_id` | Record identifier, retained unchanged |
+| `business_name` | Raw business name |
+| `business_address` | Raw business address |
+| `country` | Raw country value |
 
-## 6. Field-Level Transformations
+The repository's source TSVs are `train_source1.tsv`, `train_source2.tsv`, and `train_source3.tsv`; the checked workspace places them under `datasets/train/`. Test inputs, when available, use the same names under `datasets/test/`. Ground truth is kept separate from record features.
 
-## 7. Missing Value Handling
+Other input columns are retained but are not transformed. There are no city, state, postal-code, phone, email, or URL transformations.
 
-## 8. Duplicate Handling
+## Pipeline and Transformations
 
-## 9. Data Leakage Prevention
+The function copies the DataFrame, raises `ValueError` if a required column is absent, fills null name/address/country values with empty strings, and appends normalized fields. It does not remove rows or columns.
 
-## 10. Output Data
+| Output column | Transformation |
+|---|---|
+| `business_name_normalized` | String conversion, Unicode NFKC, lowercase, punctuation-to-space, whitespace collapse, trim |
+| `business_address_normalized` | String conversion, Unicode NFKC, lowercase, comma/semicolon/slash-to-space, remaining punctuation-to-space, whitespace collapse, trim |
+| `country_normalized` | String conversion, Unicode NFKC, lowercase, trim |
 
-## 11. Output Schema
+Country aliases such as `US` and `USA` are not unified. Business suffixes are not expanded or removed. These conservative rules avoid unsupported equivalence assumptions.
 
-## 12. Reproducibility
+## Missing Values and Duplicates
 
-## 13. Execution
+Null values in the three text columns become `""` in both the raw and normalized columns. Missing identifiers are not repaired. Duplicate rows and duplicate IDs are neither removed nor reported; callers are responsible for identifier uniqueness.
 
-## 14. Validation and Tests
+## Data Quality and Leakage
 
-## 15. Known Limitations
+No general data-quality report is generated. The code validates required-column presence only; it does not report row counts, missingness, malformed values, or duplicate counts. Normalization is deterministic and has no fitted state, so it does not learn from labels or evaluation-set statistics. Keep ground-truth columns outside model features.
 
-## 16. Handoff to Candidate Generation
+## Output
 
-At the end, explicitly state:
+The function returns the original DataFrame columns plus the three normalized columns listed above. It does not write a file.
 
-INPUT:
-<files>
+## Execution and Tests
 
-PROCESS:
-<steps>
+There is no `scripts/preprocess.py` in this repository. Call the function from Python; training and inference modules also call it internally:
 
-OUTPUT:
-<files>
+```python
+from business_entity_resolution.src.preprocessing import preprocess_dataframe
 
-NEXT STAGE:
-Candidate Generation
+processed = preprocess_dataframe(records)
+```
 
-Do not invent dataset columns. Inspect the actual dataset and document the real schema.
+Run `pytest tests/test_preprocessing.py` to validate normalization and required-column behavior.
+
+## Limitations
+
+- Only name, address, and country are normalized.
+- Country aliases, legal suffixes, and contact fields are not standardized.
+- Duplicate handling, a standalone CLI, and a data-quality report are not implemented.
+- Some scripts default to `dataset/`, while the checked workspace data directory is `datasets/`.

@@ -1,199 +1,80 @@
 # Model Training
 
-## 1. Purpose
-The purpose of the Model Training stage is to construct, evaluate, and save a binary classification machine learning model that determines whether a candidate pair of business entity records represents the exact same real-world business entity.
+## Purpose
 
-## 2. Position in Pipeline
-The Model Training stage sits downstream of Candidate Generation & Feature Engineering, and upstream of Entity Matching:
+Train a binary classifier that estimates whether two records in a generated pair refer to the same business. The training implementation is in `code/business_entity_resolution/src/models/train.py`; the CLI is `scripts/train.py`.
 
-```
-Raw Data
-   ↓
-Preprocessing
-   ↓
-Candidate Generation
-   ↓
-Candidate Pairs
-   ↓
-Feature Engineering
-   ↓
-Model Training [THIS STAGE]
-   ↓
-Trained Model
-   ↓
-Entity Matching
-```
+## Inputs
 
-## 3. Input Data
-The model training process consumes:
-1. **Candidate-pair dataset & features artifact**: `artifacts/candidates/training_features.parquet` (or `artifacts/candidates/training_features.tsv`).
-2. **Ground-truth labels**: Derived from `dataset/train/train_ground_truth.tsv`.
-3. **Entity record sources**: `dataset/train/train_source1.tsv`, `dataset/train/train_source2.tsv`, and `dataset/train/train_source3.tsv`.
+Training consumes a candidate-pair table with source attributes, `label`, and `entity_group_id`. If the configured feature file exists, the CLI reads it as Parquet or TSV. Otherwise it tries to build pairs from `dataset/train/train_source{1,2,3}.tsv` and `dataset/train/train_ground_truth.tsv` (note the singular legacy path). The source files in this workspace are under `datasets/train/`.
 
-## 4. Input Schema
-Each candidate record pair contains the raw and normalized attributes along with engineered comparison features:
+Default command:
 
-| Column Name | Type | Description |
-|---|---|---|
-| `entity_id_1` | string | Unique identifier for entity record 1 |
-| `business_name_1` | string | Business name for record 1 |
-| `business_address_1` | string | Business address for record 1 |
-| `country_1` | string | Country code for record 1 |
-| `entity_id_2` | string | Unique identifier for entity record 2 |
-| `business_name_2` | string | Business name for record 2 |
-| `business_address_2` | string | Business address for record 2 |
-| `country_2` | string | Country code for record 2 |
-| `label` | integer | Ground-truth binary label (1 = match, 0 = non-match) |
-| `entity_group_id` | integer | Entity cluster ID used for leakage-safe grouping |
-
-## 5. Feature Engineering
-Comparison features measure string similarity, token overlap, exact attribute equality, and missingness across business entity attributes (`business_name`, `business_address`, `country`). All string comparisons utilize normalized fields produced by the preprocessing module.
-
-## 6. Feature Definitions
-The 19 engineered features used by the model are:
-
-1. `name_ratio`: RapidFuzz normalized Levenshtein ratio on business names [0.0, 1.0]
-2. `name_partial_ratio`: RapidFuzz partial substring similarity on business names [0.0, 1.0]
-3. `name_token_sort_ratio`: RapidFuzz token-sorted ratio handling word order permutations [0.0, 1.0]
-4. `name_token_set_ratio`: RapidFuzz token-set similarity handling duplicated/extra words [0.0, 1.0]
-5. `name_jw_similarity`: Jaro-Winkler similarity on business names [0.0, 1.0]
-6. `address_ratio`: RapidFuzz ratio on normalized addresses [0.0, 1.0]
-7. `address_partial_ratio`: RapidFuzz partial substring ratio on addresses [0.0, 1.0]
-8. `address_token_set_ratio`: RapidFuzz token-set ratio on addresses [0.0, 1.0]
-9. `address_jw_similarity`: Jaro-Winkler similarity on addresses [0.0, 1.0]
-10. `country_exact_match`: Binary indicator (1.0 if both non-empty country strings match, else 0.0)
-11. `country_missing`: Binary indicator (1.0 if either country is missing/empty, else 0.0)
-12. `name_exact_match`: Binary indicator (1.0 if normalized business names match exactly, else 0.0)
-13. `address_exact_match`: Binary indicator (1.0 if normalized addresses match exactly, else 0.0)
-14. `name_token_overlap`: Token Jaccard similarity index on business name words [0.0, 1.0]
-15. `address_token_overlap`: Token Jaccard similarity index on address words [0.0, 1.0]
-16. `name_char_len_diff`: Absolute difference in character length of normalized business names
-17. `address_char_len_diff`: Absolute difference in character length of normalized addresses
-18. `name_missing`: Binary indicator (1.0 if either business name is missing, else 0.0)
-19. `address_missing`: Binary indicator (1.0 if either address is missing, else 0.0)
-
-## 7. Label Definition
-- `1` = Positive match (both candidate records refer to the same real-world business entity).
-- `0` = Negative match (candidate records represent different business entities).
-
-Ground-truth labels were assigned by mapping `source1_entity_id` to its matched IDs in `train_ground_truth.tsv`. Negative pairs were generated via multi-pass blocking (same country + prefix/token key) between non-matching records.
-
-## 8. Dataset Split
-To avoid data leakage (where records belonging to the same underlying entity cluster appear in both training and test splits), a **Group-Based Split** (`GroupShuffleSplit`) on `entity_group_id` was executed:
-
-- **Split Ratio**: 70% Train, 15% Validation, 15% Test
-- **Random Seed**: `42`
-- **Train Size**: 22,537 candidate pairs
-- **Validation Size**: 4,695 candidate pairs
-- **Test Size**: 4,888 candidate pairs
-
-## 9. Class Distribution
-The overall dataset contains 32,120 candidate pairs:
-- **Positive Examples (label = 1)**: 18,331 (57.07%)
-- **Negative Examples (label = 0)**: 13,789 (42.93%)
-
-Distribution across splits:
-- **Train Set**: 22,537 pairs
-- **Validation Set**: 4,695 pairs
-- **Test Set**: 4,888 pairs
-
-## 10. Models Evaluated
-Three baseline models were evaluated:
-1. **Logistic Regression**: Baseline linear model with balanced class weighting.
-2. **Random Forest Classifier**: Non-linear ensemble model (100 estimators, max depth 12).
-3. **Gradient Boosting Classifier**: Sequential boosting tree model (100 estimators, max depth 5, learning rate 0.1).
-
-## 11. Evaluation Metrics
-Models were compared using:
-- Precision
-- Recall
-- F1-Score
-- Accuracy
-- ROC-AUC
-- PR-AUC
-- Confusion Matrix
-
-## 12. Model Selection Criteria
-The primary metric for model selection was **Validation F1-Score** after threshold tuning on the validation set, ensuring an optimal balance between precision and recall.
-
-## 13. Final Model
-**Gradient Boosting Classifier** was selected as the final model.
-
-Validation Performance Comparison:
-- **Logistic Regression**: Default F1 = 0.9868 | Optimal (thresh=0.45) F1 = 0.9878
-- **Random Forest**: Default F1 = 0.9956 | Optimal (thresh=0.68) F1 = 0.9961
-- **Gradient Boosting**: Default F1 = 0.9957 | Optimal (thresh=0.72) F1 = **0.9965**
-
-Test Set Performance (Final Model):
-- **Accuracy**: 0.9939
-- **Precision**: 0.9964
-- **Recall**: 0.9929
-- **F1-Score**: 0.9946
-- **ROC-AUC**: 0.9998
-- **PR-AUC**: 0.9999
-- **Confusion Matrix**: `[[2074, 10], [20, 2784]]`
-
-## 14. Hyperparameters
-Final Gradient Boosting Classifier parameters:
-- `n_estimators`: 100
-- `max_depth`: 5
-- `learning_rate`: 0.1
-- `subsample`: 1.0
-- `random_state`: 42
-
-## 15. Decision Threshold
-- **Default Threshold**: 0.50
-- **Optimal Decision Threshold**: **0.72**
-- **Methodology**: Evaluated decision thresholds from 0.05 to 0.95 on the **Validation Set** to maximize F1-score. The test set was NOT used for threshold tuning.
-
-## 16. Model Artifact
-Model artifacts are saved under `models/`:
-- `models/entity_resolution_model.joblib`: Serialized Gradient Boosting model binary
-- `models/feature_config.json`: Feature list and count configuration
-- `models/model_metadata.json`: Model type, hyperparameters, evaluation metrics, decision threshold, and software dependency versions
-
-## 17. Inference
-Inference can be executed independently using `scripts/predict.py`:
 ```bash
-python scripts/predict.py \
-    --model models/entity_resolution_model.joblib \
-    --input artifacts/candidates/test_features.parquet \
-    --output output/predictions.tsv
+python scripts/train.py --input artifacts/candidates/training_features.parquet --output models/entity_resolution_model.joblib
 ```
 
-## 18. Reproducibility
-- **Python Version**: 3.11.9
-- **Random Seed**: 42
-- **Key Dependencies**: `scikit-learn==1.8.0`, `pandas==2.2.3`, `numpy==1.26.4`, `rapidfuzz==3.14.6`, `joblib==1.5.3`
+When the feature file is missing, the script samples up to 10,000 positive ground-truth anchors and 30,000 negatives by default, with random seed 42. It extracts features and writes the generated table before splitting. The fallback data directory is hard-coded; the script does not currently expose a `--train-dir` option.
 
-## 19. Validation
-The pipeline was verified through unit tests in `tests/`:
-- `tests/test_preprocessing.py`: Validates string normalization
-- `tests/test_features.py`: Validates feature engineering calculations
-- `tests/test_pipeline.py`: Validates group splitting, model training, threshold tuning, and artifact serialization
+## Feature Input
 
-All tests passed cleanly (`pytest tests/`).
+The model consumes these 19 comparison features, in the order recorded by `models/model_metadata.json`:
 
-## 20. Known Limitations
-- Candidate generation hard negatives rely on country and name character prefix blocking.
-- Missing values in address or business name reduce token overlap features to zero, relying more heavily on exact country matches and missing indicators.
+`name_ratio`, `name_partial_ratio`, `name_token_sort_ratio`, `name_token_set_ratio`, `name_jw_similarity`, `address_ratio`, `address_partial_ratio`, `address_token_set_ratio`, `address_jw_similarity`, `country_exact_match`, `country_missing`, `name_exact_match`, `address_exact_match`, `name_token_overlap`, `address_token_overlap`, `name_char_len_diff`, `address_char_len_diff`, `name_missing`, `address_missing`.
 
-## 21. Handoff / Deployment
-The trained model artifact `models/entity_resolution_model.joblib` and feature configuration `models/feature_config.json` can be loaded independently in production. Incoming candidate pairs must pass through `extract_features_dataframe` to ensure identical feature ordering before calling `predict_proba`.
+Pair IDs, source strings, labels, and group IDs are not model features.
 
----
+## Split and Model Selection
 
-INPUT:
-artifacts/candidates/training_features.parquet
+`split_data_by_group` uses `GroupShuffleSplit` on `entity_group_id` to create train, validation, and test portions. The training code compares Logistic Regression, Random Forest, and Gradient Boosting. It tunes a threshold on validation pairwise predictions for F1, chooses the model with highest validation F1, then reports pairwise metrics on the test portion.
 
-FEATURES:
-name_ratio, name_partial_ratio, name_token_sort_ratio, name_token_set_ratio, name_jw_similarity, address_ratio, address_partial_ratio, address_token_set_ratio, address_jw_similarity, country_exact_match, country_missing, name_exact_match, address_exact_match, name_token_overlap, address_token_overlap, name_char_len_diff, address_char_len_diff, name_missing, address_missing
+This objective differs from the entity-level competition score. A strong pairwise result does not imply a strong per-Source-1 macro score, particularly for singletons or records with multiple true matches.
 
-MODEL:
-GradientBoostingClassifier(n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42)
+## Checked-In Model Snapshot
 
-OUTPUT:
-models/entity_resolution_model.joblib
+Current GitHub `main` metadata identifies a `HistGradientBoosting` model with `max_iter=250`, `max_depth=8`, `learning_rate=0.08`, and `random_state=42`. Its stored decision threshold is `0.62`. The current trainer compares HistGradientBoosting, Extra Trees, Random Forest, Gradient Boosting, and Logistic Regression, choosing by validation pairwise F1.
 
-INFERENCE:
-python scripts/predict.py --model models/entity_resolution_model.joblib --input artifacts/candidates/test_features.parquet --output output/predictions.tsv
+The metadata reports these pairwise test metrics:
+
+| Metric | Value |
+|---|---:|
+| Precision | 0.9989 |
+| Recall | 0.9984 |
+| F1 | 0.9987 |
+| Accuracy | 0.9978 |
+| ROC-AUC | 0.9999 |
+| PR-AUC | 1.0000 |
+
+These values are from the saved model metadata; they are pairwise metrics, not macro entity-level $F_{0.5}$ and not a newly computed leaderboard result.
+
+## Competition Metric and Score Status
+
+For each Source 1 entity, compare the set of predicted IDs to its ground-truth set. Compute precision and recall for that entity, then:
+
+$$F_{0.5} = \frac{1.25 \times P \times R}{0.25 \times P + R}$$
+
+The final score is the arithmetic mean over every Source 1 entity. A true singleton with no predicted matches scores 1; a singleton with any predicted match scores 0. The metric is precision-weighted because false merges are costly.
+
+The last user-reported overall score is **0.056**. The checked-in `output/matching_results.tsv` contains only a partial set of IDs, and the evaluation source files and labels are not present under `datasets/test`; therefore no new overall macro $F_{0.5}$ score can be computed from this checkout. The local 95.1% candidate recall measurement and the pairwise F1 above are not final scores.
+
+`scripts/tune_threshold_f0_5.py` can sweep thresholds against the entity-level metric, but its default procedure rebuilds candidate pairs from the supplied training directory. It should be treated as exploratory unless the evaluated entities are held out from model training and threshold selection.
+
+## Artifacts
+
+Training writes the following files under the output model directory:
+
+- `entity_resolution_model.joblib`: serialized classifier
+- `feature_config.json`: ordered feature names and count
+- `model_metadata.json`: model name, hyperparameters, pairwise metrics, threshold, seed, and package versions
+
+## Inference and Tests
+
+For a precomputed feature table, `scripts/predict.py` writes detailed pair predictions. For grouped submission files covering every Source 1 ID, use `scripts/generate_submission.py`; see [Candidate Generation](CANDIDATE_GENERATION.md).
+
+Run `pytest tests/test_pipeline.py` for training, grouped split, threshold, and artifact tests. Run the full suite with `pytest tests/`.
+
+## Limitations
+
+- Model selection tunes pairwise F1 rather than macro entity-level $F_{0.5}$.
+- The training fallback uses a singular `dataset/` path, while the workspace data directory is `datasets/`.
+- Reproducible leaderboard scoring requires the official evaluation labels and full evaluation source files, which are not present in this checkout.
