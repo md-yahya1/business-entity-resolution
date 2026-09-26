@@ -1,5 +1,5 @@
 {
-  "model_type": "GradientBoosting",
+  "model_type": "RandomForest",
   "feature_names": [
     "name_ratio",
     "name_partial_ratio",
@@ -21,54 +21,53 @@
     "name_missing",
     "address_missing"
   ],
-  "training_date": "2026-09-25T17:46:23.255200",
+  "training_date": "2026-09-26T09:25:45.875670",
   "dataset_version": "1.0",
   "random_seed": 42,
   "hyperparameters": {
+    "bootstrap": true,
     "ccp_alpha": 0.0,
-    "criterion": "friedman_mse",
-    "init": null,
-    "learning_rate": 0.1,
-    "loss": "log_loss",
-    "max_depth": 5,
-    "max_features": null,
+    "class_weight": "balanced",
+    "criterion": "gini",
+    "max_depth": 12,
+    "max_features": "sqrt",
     "max_leaf_nodes": null,
+    "max_samples": null,
     "min_impurity_decrease": 0.0,
     "min_samples_leaf": 1,
     "min_samples_split": 2,
     "min_weight_fraction_leaf": 0.0,
+    "monotonic_cst": null,
     "n_estimators": 100,
-    "n_iter_no_change": null,
+    "n_jobs": null,
+    "oob_score": false,
     "random_state": 42,
-    "subsample": 1.0,
-    "tol": 0.0001,
-    "validation_fraction": 0.1,
     "verbose": 0,
     "warm_start": false
   },
   "metrics": {
-    "precision": 0.9964209019327129,
-    "recall": 0.992867332382311,
-    "f1_score": 0.9946409431939979,
-    "accuracy": 0.9938625204582652,
+    "precision": 0.9935783089546913,
+    "recall": 0.9932239657631954,
+    "f1_score": 0.9934011057606563,
+    "accuracy": 0.992430441898527,
     "confusion_matrix": [
       [
-        2074,
-        10
+        2066,
+        18
       ],
       [
-        20,
-        2784
+        19,
+        2785
       ]
     ],
-    "roc_auc": 0.9998391384942267,
-    "pr_auc": 0.9998815951194054
+    "roc_auc": 0.9997332094813826,
+    "pr_auc": 0.999803875901972
   },
-  "decision_threshold": 0.72,
+  "decision_threshold": 0.5599999999999999,
   "software_versions": {
-    "scikit-learn": "1.8.0",
-    "pandas": "2.2.3",
-    "numpy": "1.26.4",
-    "joblib": "1.5.3"
+    "scikit-learn": "1.9.1",
+    "pandas": "2.3.3",
+    "numpy": "2.4.6",
+    "joblib": "1.6.0"
   }
 }
