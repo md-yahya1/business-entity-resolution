@@ -83,7 +83,7 @@ def main():
     parser.add_argument("--model", default="models/entity_resolution_model.joblib")
     parser.add_argument("--output-dir", default="output")
     parser.add_argument("--threshold", type=float, default=None, help="Override model_metadata.json's decision_threshold")
-    parser.add_argument("--top-k", type=int, default=25, help="Max blocking candidates per S1 entity")
+    parser.add_argument("--top-k", type=int, default=50, help="Max blocking candidates per S1 entity")
     parser.add_argument("--chunk-size", type=int, default=50000, help="Number of S1 entities processed per batch")
     parser.add_argument("--prefix", default="", help="File prefix, e.g. 'test_' or 'train_'")
     args = parser.parse_args()
