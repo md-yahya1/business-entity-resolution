@@ -100,15 +100,11 @@ def main():
                 if m.strip():
                     needed_other.add(m.strip())
 
-        print(f"Loading targeted records for {len(needed_s1)} positive S1 anchors...")
+        print("Loading full Source-1/2/3 training tables...")
         s1 = pd.read_csv(s1_path, sep="\t")
-        s1 = s1[s1["entity_id"].isin(needed_s1)]
-
         s2 = pd.read_csv(s2_path, sep="\t")
-        s2 = s2[s2["entity_id"].isin(needed_other) | (s2.index < 30000)]
-
         s3 = pd.read_csv(s3_path, sep="\t")
-        s3 = s3[s3["entity_id"].isin(needed_other) | (s3.index < 30000)]
+        print(f"Loaded {len(s1):,} S1 / {len(s2):,} S2 / {len(s3):,} S3 records.")
 
         print("Generating candidate pairs...")
         pairs_df = generate_candidate_pairs(
