@@ -79,7 +79,29 @@ def main():
     print(f"Running model inference on {len(df)} candidate pairs...")
     predictions_df = predict_candidate_pairs(df, model_path=args.model, output_path=args.output)
 
-    print(f"\nInference completed. Predictions saved to: {args.output}")
+    # Format matching results into source1_entity_id -> matched_entity_ids TSV format
+    matches_df = predictions_df[predictions_df["is_match"] == 1]
+    group_map = {}
+    for _, row in matches_df.iterrows():
+        id1, id2 = str(row["entity_id_1"]), str(row["entity_id_2"])
+        if id1.startswith("S1-"):
+            s1, other = id1, id2
+        elif id2.startswith("S1-"):
+            s1, other = id2, id1
+        else:
+            s1, other = id1, id2
+        group_map.setdefault(s1, set()).add(other)
+
+    matching_results_df = pd.DataFrame([
+        {"source1_entity_id": s1, "matched_entity_ids": ",".join(sorted(list(m)))}
+        for s1, m in group_map.items()
+    ])
+    matching_results_path = os.path.join(os.path.dirname(args.output), "matching_results.tsv")
+    matching_results_df.to_csv(matching_results_path, sep="\t", index=False)
+
+    print(f"\nInference completed.")
+    print(f" - Detailed pair predictions saved to: {args.output}")
+    print(f" - Formatted evaluation matching results saved to: {matching_results_path}")
     print(f"Summary of Predictions:")
     print(predictions_df["is_match"].value_counts().to_dict())
     print("\nSample predictions:")
@@ -89,3 +111,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
