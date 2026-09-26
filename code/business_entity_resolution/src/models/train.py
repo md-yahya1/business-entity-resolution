@@ -134,7 +134,7 @@ def train_and_evaluate_models(
         opt_thresh, opt_metrics = find_optimal_entity_threshold(
             entity_ids_val, y_val, val_probs, fine_refine=True
         )
-        selection_score = model_selection_score(opt_metrics, y_val, val_probs)
+        selection_score = float(opt_metrics.get("entity_f0_5", opt_metrics.get("f0_5", 0.0)))
 
         model_results[name] = {
             "model_object": model,
