@@ -15,6 +15,8 @@ from ..features import extract_features_dataframe, FEATURE_NAMES
 from ..evaluation.metrics import (
     evaluate_predictions,
     find_optimal_threshold,
+    find_optimal_entity_threshold,
+    entity_level_f0_5,
     model_selection_score,
 )
 from .ensemble import build_candidate_models, is_weight_tuned_ensemble
