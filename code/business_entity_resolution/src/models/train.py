@@ -49,11 +49,15 @@ def split_data_by_group(
 
     X_train, y_train = X_train_val[train_idx], y_train_val[train_idx]
     X_val, y_val = X_train_val[val_idx], y_train_val[val_idx]
+    entity_ids = df["entity_id_1"].astype(str).values
 
     return {
         "X_train": X_train, "y_train": y_train,
         "X_val": X_val, "y_val": y_val,
         "X_test": X_test, "y_test": y_test,
+        "entity_ids_train": entity_ids[train_val_idx][train_idx],
+        "entity_ids_val": entity_ids[train_val_idx][val_idx],
+        "entity_ids_test": entity_ids[test_idx],
         "feature_names": FEATURE_NAMES,
     }
 
