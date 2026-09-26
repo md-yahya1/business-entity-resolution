@@ -11,7 +11,13 @@ import numpy as np
 
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, HistGradientBoostingClassifier, ExtraTreesClassifier
+from sklearn.ensemble import (
+    RandomForestClassifier,
+    GradientBoostingClassifier,
+    HistGradientBoostingClassifier,
+    ExtraTreesClassifier,
+    VotingClassifier,
+)
 
 from ..features import extract_features_dataframe, FEATURE_NAMES
 from ..evaluation.metrics import evaluate_predictions, find_optimal_threshold
@@ -60,22 +66,32 @@ def train_and_evaluate_models(
     random_seed: int = 42
 ) -> Dict[str, Any]:
     """
-    Train and compare baseline models (Logistic Regression, Random Forest, Gradient Boosting).
+    Train and compare baseline models (Logistic Regression, Random Forest, Gradient Boosting, Soft Voting Ensemble).
     """
     X_train, y_train = split_data["X_train"], split_data["y_train"]
     X_val, y_val = split_data["X_val"], split_data["y_val"]
     X_test, y_test = split_data["X_test"], split_data["y_test"]
 
+    hgb = HistGradientBoostingClassifier(
+        max_iter=300, max_depth=10, learning_rate=0.07, random_state=random_seed
+    )
+    et = ExtraTreesClassifier(
+        n_estimators=175, max_depth=16, random_state=random_seed, class_weight="balanced", n_jobs=-1
+    )
+    rf = RandomForestClassifier(
+        n_estimators=175, max_depth=16, random_state=random_seed, class_weight="balanced", n_jobs=-1
+    )
+
     candidate_models = {
-        "HistGradientBoosting": HistGradientBoostingClassifier(
-            max_iter=250, max_depth=8, learning_rate=0.08, random_state=random_seed
+        "SoftVotingEnsemble": VotingClassifier(
+            estimators=[("hist", hgb), ("extra", et), ("rf", rf)],
+            voting="soft",
+            weights=[0.50, 0.30, 0.20],
+            n_jobs=-1
         ),
-        "ExtraTrees": ExtraTreesClassifier(
-            n_estimators=150, max_depth=14, random_state=random_seed, class_weight="balanced", n_jobs=-1
-        ),
-        "RandomForest": RandomForestClassifier(
-            n_estimators=150, max_depth=14, random_state=random_seed, class_weight="balanced", n_jobs=-1
-        ),
+        "HistGradientBoosting": hgb,
+        "ExtraTrees": et,
+        "RandomForest": rf,
         "GradientBoosting": GradientBoostingClassifier(
             n_estimators=100, max_depth=6, learning_rate=0.1, random_state=random_seed
         ),

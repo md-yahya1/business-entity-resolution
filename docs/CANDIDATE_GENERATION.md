@@ -1,236 +1,72 @@
-You are responsible for documenting and implementing the CANDIDATE GENERATION stage of a machine-learning Entity Resolution project.
-
-PROJECT:
-Business Entity Resolution
-
-PIPELINE:
-
-Raw Dataset
-    ↓
-Data Preprocessing
-    ↓
-Processed Entity Records
-    ↓
-Candidate Generation
-    ↓
-Candidate Pairs
-    ↓
-Feature Engineering
-    ↓
-Model Training
-    ↓
-Entity Matching
-
-Your responsibility is the candidate-generation stage.
-
-==================================================
-OBJECTIVE
-==================================================
-
-Candidate generation should reduce the number of possible entity pairs that need expensive comparison.
-
-Instead of comparing every record against every other record:
-
-N × M
-
-generate a smaller set of plausible candidate pairs.
-
-The candidate-generation stage must prioritize high recall while controlling the number of generated pairs.
-
-Do NOT make final entity-match decisions here unless explicitly required.
-
-==================================================
-INPUT
-==================================================
-
-Read the actual output produced by DATA_PREPROCESSING.md.
-
-Do not invent filenames or columns.
-
-Document:
-
-- Input file
-- Input schema
-- Entity identifiers
-- Available normalized fields
-- Record counts
-
-==================================================
-CANDIDATE GENERATION METHODS
-==================================================
-
-Inspect the dataset and determine appropriate blocking/candidate-generation strategies.
-
-Potential methods include:
-
-- Exact blocking
-- Prefix blocking
-- Token-based blocking
-- Phonetic blocking
-- Character n-gram blocking
-- Postal-code blocking
-- City/state blocking
-- Domain blocking
-- Multi-pass blocking
-
-Do not blindly implement every method.
-
-Choose methods based on the actual dataset.
-
-Explain:
-
-- Why each blocking key is used
-- Expected recall
-- Expected candidate reduction
-- Risks of false negatives
-
-If multiple blocking strategies are used, union their candidates.
-
-==================================================
-IMPORTANT PRINCIPLE
-==================================================
-
-Candidate generation should generally favor RECALL.
-
-It is acceptable to generate additional candidate pairs.
-
-It is NOT acceptable to aggressively filter candidates in a way that causes true matches to disappear.
-
-Document this tradeoff.
-
-==================================================
-OUTPUT
-==================================================
-
-Generate a candidate-pair dataset containing at minimum:
-
-- left/entity record ID
-- right/entity record ID
-- blocking method(s)
-- optional blocking key
-- optional metadata useful for downstream feature engineering
-
-Do not include the target label unless it is explicitly available and needed for training.
-
-Example:
-
-candidate_pairs.parquet
-
-Schema:
-
-left_id
-right_id
-blocking_method
-blocking_key
-
-Use the actual dataset schema rather than blindly copying this example.
-
-==================================================
-DEDUPLICATION
-==================================================
-
-Ensure:
-
-- (A, B) and (B, A) are not duplicated when entity matching is symmetric.
-- Self-pairs are removed.
-- Duplicate candidate pairs from multiple blocking strategies are deduplicated.
-
-==================================================
-EVALUATION
-==================================================
-
-If labeled training data is available, measure:
-
-- Candidate recall
-- Number of generated pairs
-- Candidate reduction ratio
-- Average candidates per entity
-- Distribution of candidate counts
-
-Candidate Recall:
-
-true matching pairs retained
------------------------------
-true matching pairs available
-
-Report this clearly.
-
-==================================================
-IMPLEMENTATION
-==================================================
-
-Create:
-
-scripts/generate_candidates.py
-
-Example interface:
-
-python scripts/generate_candidates.py \
-    --input artifacts/processed/train_processed.parquet \
-    --output artifacts/candidates/candidate_pairs.parquet
-
-Do not hardcode Windows absolute paths.
-
-Use configurable paths.
-
-==================================================
-DOCUMENTATION
-==================================================
-
-Create:
-
-docs/CANDIDATE_GENERATION.md
-
-Required structure:
-
 # Candidate Generation
 
-## 1. Purpose
+## Purpose
 
-## 2. Position in Pipeline
+Candidate generation reduces the number of record comparisons passed to feature extraction and the classifier. It does not decide final matches.
 
-## 3. Input Data
+## Position in Pipeline
 
-## 4. Input Schema
+```text
+Source TSVs -> preprocessing -> candidates -> pair features -> classifier
+            -> matching_results.tsv and candidate_pairs.tsv
+```
 
-## 5. Candidate Generation Strategy
+There are separate training and inference implementations: `candidate_generator.generate_candidate_pairs` and `inference_blocking.generate_inference_candidates`. Current `main` also contains `candidate_generator.generate_test_candidates`, a helper that is not called by either inference CLI.
 
-## 6. Blocking Keys
+## Inputs
 
-## 7. Blocking Algorithms
+Each source DataFrame requires `entity_id`, `business_name`, `business_address`, and `country`. Ground truth is optional for training and has `source1_entity_id` plus comma-separated `matched_entity_ids`. The checked workspace stores source files under `datasets/train/` and `datasets/test/`; some scripts retain a legacy `dataset/` default.
 
-## 8. Candidate Deduplication
+## Training Pair Generation
 
-## 9. Self-Match Removal
+`scripts/train.py` calls `generate_candidate_pairs` when its configured training-feature file is absent. Ground-truth matches provide positive pairs, capped by `--max-positives` (default 10,000). The function samples up to 60,000 records for negative-pair blocking, groups them by normalized country and first character of normalized name, samples up to 40 records per block, and creates a limited set of nearby index pairs until `--max-negatives` (default 30,000) is reached. The random seed defaults to 42. Pairs include raw source attributes, `label`, and `entity_group_id` for training.
 
-## 10. Candidate Recall
+This is a training sampler, not the inference candidate strategy. Negative pairs may be drawn from any source combination. Pair deduplication uses the unordered pair of IDs; positive pairs are added from ground truth even if the names would not share a blocking key.
 
-## 11. Candidate Reduction
+`generate_test_candidates` is an additional helper on current `main`. It blocks on exact normalized country and first full name token, then emits up to 15 pairs per Source 1 record by default. It does not use address tokens and currently sets `label=0` and `entity_group_id=0` on output rows. It is not the path used by `scripts/generate_submission.py`; do not treat its placeholder label as a ground-truth prediction.
 
-## 12. Output Data
+## Inference Blocking Strategy
 
-## 13. Output Schema
+`generate_inference_candidates` preprocesses each source and returns one row for every Source 1 ID. Only Source 2 and Source 3 IDs can be candidates.
 
-## 14. Execution
+For each Source 1 record, the implementation:
 
-## 15. Validation
+1. Adds records sharing normalized country and the first character of normalized business name.
+2. Builds separate same-country postings for each normalized name token and address token of at least three characters. It selects up to two rare postings whose size is at most `country_fallback_cap` (default 500), sorted by posting size, field, then token.
+3. Unions these IDs and removes duplicates while preserving insertion order.
+4. If the union is empty, takes the first up to 500 records from the same-country index.
+5. Ranks the resulting pool by the larger of name and address `token_set_ratio` and retains `top_k` (default 25).
 
-## 16. Known Limitations
+The bounded candidate set is a recall/compute tradeoff. Prefix, country, posting-size, fallback-order, and top-k limits can exclude true matches. An unseen country produces no candidates; an empty candidate list is allowed and is needed to represent a singleton.
 
-## 17. Handoff to Feature Engineering / Model Training
+## Inference Output and Submission Files
 
-At the end provide:
+`generate_inference_candidates` returns `source1_entity_id` and a list-valued `candidate_entity_ids`. `expand_candidates_to_pairs` expands those lists into Source 1/Source 2-or-3 raw attribute pairs for feature extraction.
 
-INPUT:
-<exact file>
+`scripts/generate_submission.py` writes:
 
-PROCESS:
-<exact candidate generation stages>
+- `candidate_pairs.tsv`: `source1_entity_id`, `candidate_entity_ids`
+- `matching_results.tsv`: `source1_entity_id`, `matched_entity_ids`
 
-OUTPUT:
-<exact file>
+Both files contain a row for every Source 1 ID, including empty lists. Run it with `--data-dir`, `--model`, `--output-dir`, and optionally `--top-k` or `--threshold`. The threshold defaults to model metadata. The script checks ID validity, duplicate IDs in lists, and that every predicted match is in that entity's candidate list.
 
-NEXT STAGE:
-Feature Engineering / Model Training
+## Recall and Evaluation Status
 
-Do not invent statistics. Calculate them from the actual data.
+The bounded training-data diagnostic previously run on the first 100,000 rows of each source and first 250,000 ground-truth rows contained 741 true pairs; the current blocker retrieved 705 at `top_k=25` (95.1% candidate recall on that slice). This is not an unbiased full-data estimate and is not the competition score.
+
+The competition metric is macro entity-level $F_{0.5}$ over every Source 1 entity, including singletons. The last user-reported overall score is 0.056, but the evaluation/test split is absent from this checkout, so a new official macro $F_{0.5}$ score cannot be calculated here. Candidate recall must not be substituted for that score.
+
+## Validation and Limitations
+
+Run `pytest tests/test_blocking.py`. The test covers recovery of a differently named record through address tokens. The full suite is `pytest tests/`. The current index does not use phonetic or character n-gram retrieval; common name/address tokens can be excluded by the posting cap, and fallback selection can depend on input row order.
+
+## Handoff
+
+The submission generator expands candidates, computes the 19 pair-comparison features, and applies the saved classifier and threshold.
+
+```text
+INPUT: Source 1, Source 2, and Source 3 TSV files
+PROCESS: normalize -> prefix and selective-token blocks -> rank/cap -> feature extraction -> classifier
+OUTPUT: output/candidate_pairs.tsv and output/matching_results.tsv
+NEXT STAGE: Feature extraction and model-based match prediction
+```
