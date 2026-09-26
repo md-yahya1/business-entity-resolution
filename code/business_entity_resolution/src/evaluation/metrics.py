@@ -147,3 +147,76 @@ def model_selection_score(
     f05 = val_threshold_metrics.get("f0_5", val_threshold_metrics["f1_score"])
     f1 = val_threshold_metrics["f1_score"]
     return 0.50 * f05 + 0.30 * f1 + 0.20 * roc
+
+
+def entity_level_f0_5(
+    entity_ids: np.ndarray,
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    threshold: float,
+) -> float:
+    """Competition-style macro F0.5: compute F0.5 separately per S1 entity."""
+    frame = {}
+    for eid, truth, prob in zip(entity_ids, y_true, y_prob):
+        key = str(eid)
+        bucket = frame.setdefault(key, {"true": set(), "pred": set()})
+        if int(truth) == 1:
+            bucket["true"].add(str(eid))
+        if float(prob) >= threshold:
+            bucket["pred"].add(str(eid))
+
+    # Pair rows only carry a binary label, so recover per-entity counts directly.
+    # For each S1 entity: TP = predicted positive rows that are true, FP = predicted
+    # positive rows that are false, FN = true positive rows below threshold.
+    by_entity = {}
+    for eid, truth, prob in zip(entity_ids, y_true, y_prob):
+        key = str(eid)
+        stats = by_entity.setdefault(key, [0, 0, 0])
+        pred = float(prob) >= threshold
+        truth = int(truth) == 1
+        if pred and truth:
+            stats[0] += 1
+        elif pred and not truth:
+            stats[1] += 1
+        elif truth and not pred:
+            stats[2] += 1
+
+    scores = []
+    for tp, fp, fn in by_entity.values():
+        precision = tp / (tp + fp) if (tp + fp) else 1.0
+        recall = tp / (tp + fn) if (tp + fn) else 1.0
+        scores.append(pairwise_f_beta(precision, recall, beta=0.5))
+    return float(np.mean(scores)) if scores else 0.0
+
+
+def find_optimal_entity_threshold(
+    entity_ids: np.ndarray,
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    fine_refine: bool = True,
+) -> Tuple[float, Dict[str, float]]:
+    """Optimize the competition-style macro-average F0.5 over S1 entities."""
+    candidates = _threshold_candidates(y_true, y_prob)
+    best_thresh = 0.5
+    best_score = -1.0
+    best_metrics = {}
+
+    for thresh in candidates:
+        score = entity_level_f0_5(entity_ids, y_true, y_prob, float(thresh))
+        if score > best_score:
+            best_score = score
+            best_thresh = float(thresh)
+
+    if fine_refine:
+        fine = np.linspace(max(0.005, best_thresh - 0.05), min(0.995, best_thresh + 0.05), 101)
+        for thresh in fine:
+            score = entity_level_f0_5(entity_ids, y_true, y_prob, float(thresh))
+            if score > best_score:
+                best_score = score
+                best_thresh = float(thresh)
+
+    preds = (y_prob >= best_thresh).astype(int)
+    pair_metrics = evaluate_predictions(y_true, preds, y_prob)
+    pair_metrics["entity_f0_5"] = float(best_score)
+    pair_metrics["threshold"] = float(best_thresh)
+    return best_thresh, pair_metrics
