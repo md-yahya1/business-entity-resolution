@@ -89,16 +89,10 @@ def main():
 
         print("Reading raw source files and ground truth...")
         gt_all = pd.read_csv(gt_path, sep="\t")
-        gt_sample = gt_all.dropna(subset=["matched_entity_ids"]).sample(
-            n=min(args.max_positives, len(gt_all)), random_state=args.random_seed
+        gt_valid = gt_all.dropna(subset=["matched_entity_ids"])
+        gt_sample = gt_valid.sample(
+            n=min(args.max_positives, len(gt_valid)), random_state=args.random_seed
         )
-
-        needed_s1 = set(gt_sample["source1_entity_id"])
-        needed_other = set()
-        for m_str in gt_sample["matched_entity_ids"]:
-            for m in m_str.split(","):
-                if m.strip():
-                    needed_other.add(m.strip())
 
         print("Loading full Source-1/2/3 training tables...")
         s1 = pd.read_csv(s1_path, sep="\t")
@@ -155,7 +149,7 @@ def main():
         print(f"Model: {name}")
         sel = res.get("selection_score", 0.0)
         print(f"  Validation (thresh 0.5): F0.5={v_def.get('f0_5', 0):.4f}, F1={v_def['f1_score']:.4f}, Prec={v_def['precision']:.4f}, Rec={v_def['recall']:.4f}")
-        print(f"  Validation (thresh {res['optimal_threshold']:.3f}): F0.5={v_opt.get('f0_5', 0):.4f}, F1={v_opt['f1_score']:.4f}, Prec={v_opt['precision']:.4f}, Rec={v_opt['recall']:.4f}, select={sel:.4f}")
+        print(f"  Validation (thresh {res['optimal_threshold']:.3f}): entity-F0.5={v_opt.get('entity_f0_5', 0):.4f}, pair-F0.5={v_opt.get('f0_5', 0):.4f}, F1={v_opt['f1_score']:.4f}, Prec={v_opt['precision']:.4f}, Rec={v_opt['recall']:.4f}, select={sel:.4f}")
 
     best_name = eval_results["best_model_name"]
     best_model = eval_results["best_model"]
