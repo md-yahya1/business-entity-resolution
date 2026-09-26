@@ -92,10 +92,27 @@ def main():
             s1, other = id1, id2
         group_map.setdefault(s1, set()).add(other)
 
-    matching_results_df = pd.DataFrame([
-        {"source1_entity_id": s1, "matched_entity_ids": ",".join(sorted(list(m)))}
-        for s1, m in group_map.items()
-    ])
+    # Get all S1 entity IDs from test_source1.tsv if available
+    test_s1_path = os.path.join("dataset", "test", "test_source1.tsv")
+    if os.path.exists(test_s1_path):
+        s1_df = pd.read_csv(test_s1_path, sep="\t", usecols=["entity_id"])
+        all_s1_ids = s1_df["entity_id"].dropna().unique()
+    else:
+        s1_in_df = set(group_map.keys())
+        for col in ["entity_id_1", "entity_id_2"]:
+            if col in predictions_df.columns:
+                for eid in predictions_df[col].dropna().astype(str):
+                    if eid.startswith("S1-"):
+                        s1_in_df.add(eid)
+        all_s1_ids = list(s1_in_df)
+
+    rows = []
+    for s1 in all_s1_ids:
+        matched_set = group_map.get(s1, set())
+        matched_str = ",".join(sorted(list(matched_set))) if matched_set else ""
+        rows.append({"source1_entity_id": s1, "matched_entity_ids": matched_str})
+
+    matching_results_df = pd.DataFrame(rows)
     matching_results_path = os.path.join(os.path.dirname(args.output), "matching_results.tsv")
     matching_results_df.to_csv(matching_results_path, sep="\t", index=False)
 
