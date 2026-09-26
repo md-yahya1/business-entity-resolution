@@ -88,22 +88,22 @@ def compute_pair_features(
     }
 
 
-def extract_features_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def extract_features_dataframe(df: pd.DataFrame, batch_size: int = 50000) -> pd.DataFrame:
     """
     Extract features for a DataFrame containing pair entity attributes.
-    Expected columns:
-    ['business_name_1', 'business_address_1', 'country_1',
-     'business_name_2', 'business_address_2', 'country_2']
+    Optimized with direct list zipping and float32 downcasting for high scalability.
     """
-    features_list = []
-    for row in df.itertuples(index=False):
-        f = compute_pair_features(
-            getattr(row, 'business_name_1', ''),
-            getattr(row, 'business_address_1', ''),
-            getattr(row, 'country_1', ''),
-            getattr(row, 'business_name_2', ''),
-            getattr(row, 'business_address_2', ''),
-            getattr(row, 'country_2', '')
-        )
-        features_list.append(f)
-    return pd.DataFrame(features_list)[FEATURE_NAMES]
+    n1_col = df["business_name_1"].fillna("").astype(str).tolist() if "business_name_1" in df.columns else [""] * len(df)
+    a1_col = df["business_address_1"].fillna("").astype(str).tolist() if "business_address_1" in df.columns else [""] * len(df)
+    c1_col = df["country_1"].fillna("").astype(str).tolist() if "country_1" in df.columns else [""] * len(df)
+    n2_col = df["business_name_2"].fillna("").astype(str).tolist() if "business_name_2" in df.columns else [""] * len(df)
+    a2_col = df["business_address_2"].fillna("").astype(str).tolist() if "business_address_2" in df.columns else [""] * len(df)
+    c2_col = df["country_2"].fillna("").astype(str).tolist() if "country_2" in df.columns else [""] * len(df)
+
+    features_list = [
+        compute_pair_features(n1, a1, c1, n2, a2, c2)
+        for n1, a1, c1, n2, a2, c2 in zip(n1_col, a1_col, c1_col, n2_col, a2_col, c2_col)
+    ]
+    feat_df = pd.DataFrame(features_list)[FEATURE_NAMES]
+    return feat_df.astype(np.float32)
+

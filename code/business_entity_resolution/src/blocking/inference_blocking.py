@@ -27,9 +27,35 @@ import rapidfuzz.fuzz as fuzz
 from ..preprocessing import preprocess_dataframe
 
 
-def _block_key(country: str, name: str) -> str:
-    first_char = name[0] if name else ""
-    return f"{country}|{first_char}"
+CORPORATE_STOPWORDS = {
+    "the", "a", "an", "inc", "incorporated", "llc", "ltd", "limited", "corp",
+    "corporation", "co", "company", "pvt", "private", "sa", "sas", "sarl",
+    "gmbh", "ag", "spa", "srl", "bv", "nv", "oy", "ab"
+}
+
+
+def _get_significant_tokens(text: str) -> List[str]:
+    tokens = [t for t in text.split() if len(t) >= 2]
+    sig_tokens = [t for t in tokens if t not in CORPORATE_STOPWORDS]
+    return sig_tokens if sig_tokens else tokens
+
+
+def _block_keys(country: str, name: str) -> List[str]:
+    keys = []
+    if not country or not name:
+        return keys
+    # 1. Direct first char
+    keys.append(f"{country}|c1:{name[0]}")
+    # 2. First 3 chars
+    if len(name) >= 3:
+        keys.append(f"{country}|c3:{name[:3]}")
+    # 3. Significant first token
+    sig_tokens = _get_significant_tokens(name)
+    if sig_tokens:
+        keys.append(f"{country}|t0:{sig_tokens[0]}")
+        if len(sig_tokens) > 1:
+            keys.append(f"{country}|t1:{sig_tokens[1]}")
+    return keys
 
 
 def _rank_and_cap(
@@ -44,6 +70,7 @@ def _rank_and_cap(
             eid,
             max(
                 fuzz.token_set_ratio(query_name, records_by_id[eid][0]),
+                fuzz.token_sort_ratio(query_name, records_by_id[eid][0]),
                 fuzz.token_set_ratio(query_address, records_by_id[eid][1]),
             ),
         )
@@ -63,10 +90,6 @@ def generate_inference_candidates(
     """
     Returns one row per Source-1 entity:
         source1_entity_id, candidate_entity_ids (list[str], S2/S3 only)
-
-    Guarantees: every entity_id in s1_df appears exactly once, even when
-    its candidate list is empty. Never includes an S1 id, an S2-S2 pair,
-    an S3-S3 pair, or an id absent from s2_df/s3_df.
     """
     s1p = preprocess_dataframe(s1_df)
     s2p = preprocess_dataframe(s2_df)
@@ -84,43 +107,46 @@ def generate_inference_candidates(
                 row.business_name_normalized,
                 row.business_address_normalized,
             )
-            key = _block_key(row.country_normalized, row.business_name_normalized)
-            block_index[key].append(row.entity_id)
+            for b_key in _block_keys(row.country_normalized, row.business_name_normalized):
+                block_index[b_key].append(row.entity_id)
+
             country_index[row.country_normalized].append(row.entity_id)
+
             for field_name, value in (
                 ("name", row.business_name_normalized),
                 ("address", row.business_address_normalized),
             ):
-                for token in set(value.split()):
+                sig_tokens = _get_significant_tokens(value) if field_name == "name" else value.split()
+                for token in set(sig_tokens):
                     if len(token) >= 3:
                         token_index[(row.country_normalized, field_name, token)].append(row.entity_id)
 
     out_rows = []
     for row in s1p.itertuples(index=False):
-        key = _block_key(row.country_normalized, row.business_name_normalized)
-        candidates = list(block_index.get(key, []))
+        candidates = []
+        for b_key in _block_keys(row.country_normalized, row.business_name_normalized):
+            candidates.extend(block_index.get(b_key, []))
 
-        # A shared non-leading token recovers spelling/order variants while
-        # frequent tokens stay out of the candidate pool.
+        # Shared non-leading significant tokens
         token_blocks = []
         for field_name, value in (
             ("name", row.business_name_normalized),
             ("address", row.business_address_normalized),
         ):
-            for token in set(value.split()):
+            sig_tokens = _get_significant_tokens(value) if field_name == "name" else value.split()
+            for token in set(sig_tokens):
                 if len(token) < 3:
                     continue
                 token_candidates = token_index.get((row.country_normalized, field_name, token), [])
                 if 0 < len(token_candidates) <= country_fallback_cap:
                     token_blocks.append((len(token_candidates), field_name, token, token_candidates))
         token_blocks.sort(key=lambda block: (block[0], block[1], block[2]))
-        for _, _, _, token_candidates in token_blocks[:2]:
+        for _, _, _, token_candidates in token_blocks[:4]:
             candidates.extend(token_candidates)
+
         candidates = list(dict.fromkeys(candidates))
 
         if not candidates:
-            # fall back to same-country records only (cap before ranking --
-            # a big country like US/India could otherwise be O(n) per entity)
             pool = country_index.get(row.country_normalized, [])
             candidates = pool[:country_fallback_cap]
 
@@ -134,7 +160,7 @@ def generate_inference_candidates(
 
         out_rows.append({
             "source1_entity_id": row.entity_id,
-            "candidate_entity_ids": ranked,  # list, joined to a string later
+            "candidate_entity_ids": ranked,
         })
 
     return pd.DataFrame(out_rows)

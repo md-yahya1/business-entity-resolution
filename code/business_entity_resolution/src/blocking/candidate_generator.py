@@ -63,14 +63,14 @@ def generate_candidate_pairs(
                     positive_pair_set.add(pair)
                     positive_pairs.append((s1_id, m_id, 1, group_id))
 
-    # Generate negative pairs via blocking (country + first letter/token)
+    # Generate hard negative pairs via multi-pass blocking (country + first 3 chars + first token)
     negative_pairs = []
     negative_pair_set: Set[Tuple[str, str]] = set()
 
     blocks: Dict[str, List[str]] = {}
     all_eids = list(all_records.keys())
-    if len(all_eids) > 60000:
-        sample_eids = random.sample(all_eids, 60000)
+    if len(all_eids) > 100000:
+        sample_eids = random.sample(all_eids, 100000)
     else:
         sample_eids = all_eids
 
@@ -79,11 +79,20 @@ def generate_candidate_pairs(
         c = rec.country_normalized
         name_norm = rec.business_name_normalized
         if c and name_norm:
-            first_char = name_norm[0] if len(name_norm) > 0 else ""
-            key = f"{c}_{first_char}"
-            if key not in blocks:
-                blocks[key] = []
-            blocks[key].append(eid)
+            # Key 1: country + first char
+            key1 = f"{c}_{name_norm[0]}"
+            blocks.setdefault(key1, []).append(eid)
+
+            # Key 2: country + first 3 chars (hard negatives)
+            if len(name_norm) >= 3:
+                key2 = f"{c}_pre3_{name_norm[:3]}"
+                blocks.setdefault(key2, []).append(eid)
+
+            # Key 3: country + first token
+            tokens = name_norm.split()
+            if tokens and len(tokens[0]) >= 3:
+                key3 = f"{c}_tok_{tokens[0]}"
+                blocks.setdefault(key3, []).append(eid)
 
     block_keys = list(blocks.keys())
     random.shuffle(block_keys)
