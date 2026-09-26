@@ -1,14 +1,3 @@
-"""
-Candidate pair generation module for Entity Resolution pipeline.
-Generates positive and negative candidate pairs using blocking strategies.
-"""
-from typing import Tuple, List, Dict, Set
-import random
-import pandas as pd
-import numpy as np
-from ..preprocessing import preprocess_dataframe, normalize_text
-
-
 def generate_candidate_pairs(
     s1_df: pd.DataFrame,
     s2_df: pd.DataFrame,
@@ -19,122 +8,127 @@ def generate_candidate_pairs(
     random_seed: int = 42
 ) -> pd.DataFrame:
     """
-    Generate candidate pairs with ground-truth labels and underlying entity group IDs for leakage-safe splitting.
+    Generate training pairs strictly in the same direction as inference:
+    Source-1 -> Source-2/Source-3.
+
+    Every positive ground-truth pair is retained, and hard negatives are
+    sampled only from S1-to-other-source blocks. This keeps the training
+    distribution aligned with the submission pipeline.
     """
     random.seed(random_seed)
     np.random.seed(random_seed)
 
-    # Combine all records into single lookups
-    all_records = {}
-    for df in [s1_df, s2_df, s3_df]:
-        df_p = preprocess_dataframe(df)
-        for row in df_p.itertuples(index=False):
-            all_records[row.entity_id] = row
+    s1p = preprocess_dataframe(s1_df)
+    s2p = preprocess_dataframe(s2_df)
+    s3p = preprocess_dataframe(s3_df)
+
+    s1_records = {r.entity_id: r for r in s1p.itertuples(index=False)}
+    other_records = {
+        r.entity_id: r for r in pd.concat([s2p, s3p], ignore_index=True).itertuples(index=False)
+    }
 
     positive_pairs = []
     positive_pair_set: Set[Tuple[str, str]] = set()
-
     entity_to_group: Dict[str, int] = {}
-    group_counter = 0
+
+    # Give every S1 anchor its own group. All pairs for one S1 therefore
+    # remain together during GroupShuffleSplit.
+    for group_id, s1_id in enumerate(s1_records):
+        entity_to_group[s1_id] = group_id
 
     if gt_df is not None:
-        gt_valid = gt_df.dropna(subset=['matched_entity_ids'])
+        gt_valid = gt_df.dropna(subset=["matched_entity_ids"]).copy()
         if len(gt_valid) > max_positives:
             gt_valid = gt_valid.sample(n=max_positives, random_state=random_seed)
 
         for row in gt_valid.itertuples(index=False):
-            s1_id = row.source1_entity_id
-            if s1_id not in all_records:
+            s1_id = str(row.source1_entity_id)
+            if s1_id not in s1_records:
                 continue
 
-            matches = [m.strip() for m in str(row.matched_entity_ids).split(',') if m.strip()]
-            valid_matches = [m for m in matches if m in all_records]
-            if not valid_matches:
-                continue
-
-            group_id = group_counter
-            group_counter += 1
-
-            entity_to_group[s1_id] = group_id
-            for m_id in valid_matches:
-                entity_to_group[m_id] = group_id
-                pair = tuple(sorted([s1_id, m_id]))
+            matches = [m.strip() for m in str(row.matched_entity_ids).split(",") if m.strip()]
+            for m_id in matches:
+                if m_id not in other_records:
+                    continue
+                pair = (s1_id, m_id)
                 if pair not in positive_pair_set:
                     positive_pair_set.add(pair)
-                    positive_pairs.append((s1_id, m_id, 1, group_id))
+                    positive_pairs.append(
+                        (s1_id, m_id, 1, entity_to_group[s1_id])
+                    )
 
-    # Generate hard negative pairs via multi-pass blocking (country + first 3 chars + first token)
-    negative_pairs = []
-    negative_pair_set: Set[Tuple[str, str]] = set()
-
-    blocks: Dict[str, List[str]] = {}
-    all_eids = list(all_records.keys())
-    if len(all_eids) > 100000:
-        sample_eids = random.sample(all_eids, 100000)
-    else:
-        sample_eids = all_eids
-
-    for eid in sample_eids:
-        rec = all_records[eid]
-        c = rec.country_normalized
-        name_norm = rec.business_name_normalized
-        if c and name_norm:
-            # Key 1: country + first char
-            key1 = f"{c}_{name_norm[0]}"
-            blocks.setdefault(key1, []).append(eid)
-
-            # Key 2: country + first 3 chars (hard negatives)
-            if len(name_norm) >= 3:
-                key2 = f"{c}_pre3_{name_norm[:3]}"
-                blocks.setdefault(key2, []).append(eid)
-
-            # Key 3: country + first token
-            tokens = name_norm.split()
-            if tokens and len(tokens[0]) >= 3:
-                key3 = f"{c}_tok_{tokens[0]}"
-                blocks.setdefault(key3, []).append(eid)
-
-    block_keys = list(blocks.keys())
-    random.shuffle(block_keys)
-
-    for key in block_keys:
-        eids_in_block = blocks[key]
-        if len(eids_in_block) < 2:
+    # Multi-pass blocking over S2/S3 only.
+    blocks: Dict[Tuple[str, str], List[str]] = {}
+    for eid, rec in other_records.items():
+        country = rec.country_normalized
+        name = rec.business_name_normalized
+        address = rec.business_address_normalized
+        if not country:
             continue
 
-        n_samples = min(40, len(eids_in_block))
-        sub_eids = random.sample(eids_in_block, n_samples)
-        for i in range(len(sub_eids)):
-            for j in range(i + 1, min(i + 4, len(sub_eids))):
-                e1, e2 = sub_eids[i], sub_eids[j]
-                g1 = entity_to_group.get(e1, None)
-                g2 = entity_to_group.get(e2, None)
+        keys = []
+        if len(name) >= 3:
+            keys.append((country, "pre3:" + name[:3]))
+        if name:
+            for tok in name.split()[:3]:
+                if len(tok) >= 3:
+                    keys.append((country, "name:" + tok))
+        if address:
+            for tok in address.split()[:3]:
+                if len(tok) >= 4:
+                    keys.append((country, "addr:" + tok))
 
-                if g1 is not None and g2 is not None and g1 == g2:
-                    continue
+        for key in set(keys):
+            blocks.setdefault(key, []).append(eid)
 
-                pair = tuple(sorted([e1, e2]))
-                if pair not in positive_pair_set and pair not in negative_pair_set:
-                    negative_pair_set.add(pair)
-                    group_id = g1 if g1 is not None else (g2 if g2 is not None else group_counter)
-                    if g1 is None and g2 is None:
-                        group_counter += 1
-                    negative_pairs.append((e1, e2, 0, group_id))
+    negative_pairs: List[Tuple[str, str, int, int]] = []
+    negative_pair_set: Set[Tuple[str, str]] = set()
 
-                if len(negative_pairs) >= max_negatives:
-                    break
-            if len(negative_pairs) >= max_negatives:
-                break
+    s1_ids = list(s1_records.keys())
+    random.shuffle(s1_ids)
+
+    for s1_id in s1_ids:
         if len(negative_pairs) >= max_negatives:
             break
+
+        rec = s1_records[s1_id]
+        country = rec.country_normalized
+        name = rec.business_name_normalized
+        address = rec.business_address_normalized
+
+        keys = []
+        if country and len(name) >= 3:
+            keys.append((country, "pre3:" + name[:3]))
+        if country and name:
+            keys.extend((country, "name:" + tok) for tok in name.split()[:3] if len(tok) >= 3)
+        if country and address:
+            keys.extend((country, "addr:" + tok) for tok in address.split()[:3] if len(tok) >= 4)
+
+        candidate_ids = []
+        seen = set()
+        for key in keys:
+            for eid in blocks.get(key, []):
+                if eid not in seen:
+                    seen.add(eid)
+                    candidate_ids.append(eid)
+
+        random.shuffle(candidate_ids)
+        for eid in candidate_ids:
+            pair = (s1_id, eid)
+            if pair in positive_pair_set or pair in negative_pair_set:
+                continue
+            negative_pair_set.add(pair)
+            negative_pairs.append((s1_id, eid, 0, entity_to_group[s1_id]))
+            if len(negative_pairs) >= max_negatives:
+                break
 
     all_pairs = positive_pairs + negative_pairs
     random.shuffle(all_pairs)
 
     records = []
     for e1, e2, label, grp in all_pairs:
-        r1 = all_records[e1]
-        r2 = all_records[e2]
+        r1 = s1_records[e1]
+        r2 = other_records[e2]
         records.append({
             "entity_id_1": e1,
             "business_name_1": r1.business_name,
@@ -149,7 +143,6 @@ def generate_candidate_pairs(
         })
 
     return pd.DataFrame(records)
-
 
 def generate_test_candidates(
     s1_df: pd.DataFrame,
