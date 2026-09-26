@@ -114,6 +114,8 @@ def train_and_evaluate_models(
     X_train, y_train = split_data["X_train"], split_data["y_train"]
     X_val, y_val = split_data["X_val"], split_data["y_val"]
     X_test, y_test = split_data["X_test"], split_data["y_test"]
+    entity_ids_val = split_data["entity_ids_val"]
+    entity_ids_test = split_data["entity_ids_test"]
 
     candidate_models = build_candidate_models(random_seed, profile=tuning_profile)
 
@@ -129,8 +131,8 @@ def train_and_evaluate_models(
         val_preds_default = (val_probs >= 0.5).astype(int)
         val_metrics_default = evaluate_predictions(y_val, val_preds_default, val_probs)
 
-        opt_thresh, opt_metrics = find_optimal_threshold(
-            y_val, val_probs, target_metric="f0_5", fine_refine=True
+        opt_thresh, opt_metrics = find_optimal_entity_threshold(
+            entity_ids_val, y_val, val_probs, fine_refine=True
         )
         selection_score = model_selection_score(opt_metrics, y_val, val_probs)
 
@@ -153,6 +155,9 @@ def train_and_evaluate_models(
     test_probs = best_model_obj.predict_proba(X_test)[:, 1]
     test_preds = (test_probs >= best_thresh).astype(int)
     test_metrics = evaluate_predictions(y_test, test_preds, test_probs)
+    test_metrics["entity_f0_5"] = entity_level_f0_5(
+        entity_ids_test, y_test, test_probs, best_thresh
+    )
 
     return {
         "all_model_results": model_results,
