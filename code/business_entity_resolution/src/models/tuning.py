@@ -35,7 +35,7 @@ def optimize_soft_weights(
     y_true: np.ndarray,
     *,
     target_metric: str = "f0_5",
-    n_random_restarts: int = 10,
+    n_random_restarts: int = 20,
     random_state: int = 42,
 ) -> np.ndarray:
     """
@@ -54,8 +54,11 @@ def optimize_soft_weights(
         corner[idx] = 1.0
         seeds.append(corner)
 
+    # Use both diffuse and sparse Dirichlet starts so the optimizer can
+    # discover mixtures that rely on only the strongest complementary models.
     for _ in range(n_random_restarts):
         seeds.append(rng.dirichlet(np.ones(n_models)))
+        seeds.append(rng.dirichlet(np.full(n_models, 0.35)))
 
     best_weights = seeds[0]
     best_objective = np.inf
