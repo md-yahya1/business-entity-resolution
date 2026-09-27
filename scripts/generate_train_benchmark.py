@@ -25,6 +25,7 @@ def prepare_s1(df):
         "state": np.array([h["state"] for h in hints], dtype=object),
         "prefix3": np.array([x[:3] for x in s.business_name_normalized.fillna("").astype(str)], dtype=object),
         "token": np.array([selective_token(x) for x in s.business_name_normalized.fillna("").astype(str)], dtype=object),
+        "address_token": np.array([selective_token(x) for x in s.business_address_normalized.fillna("").astype(str)], dtype=object),
     }
 
 def main():
@@ -78,6 +79,7 @@ def main():
             h_postal = _hash_keys(cc, q["postal"][base:end])
             h_house = _hash_keys(cc, q["house"][base:end])
             h_city = _hash_keys(cc, q["city"][base:end])
+            h_address_token = _hash_keys(cc, q["address_token"][base:end])
             all_pairs = []
             candidate_lists = []
             direct = {}
