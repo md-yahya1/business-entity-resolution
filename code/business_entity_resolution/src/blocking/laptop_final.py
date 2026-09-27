@@ -350,3 +350,13 @@ class CompactCandidateIndex:
         selected_score = short_score[take]
         order = np.lexsort((self.ids[selected], -selected_score))
         return selected[order].astype(np.int32, copy=False)
+
+
+
+def build_index(
+    s2_df: pd.DataFrame,
+    s3_df: pd.DataFrame,
+    **kwargs,
+) -> CompactCandidateIndex:
+    """Build the compact candidate index used by inference scripts."""
+    return CompactCandidateIndex(s2_df, s3_df, **kwargs)
