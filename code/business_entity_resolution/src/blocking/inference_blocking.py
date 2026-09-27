@@ -358,6 +358,7 @@ def run_streaming_inference(
             pair_s1_indices: List[int] = []
             pair_cand_indices: List[int] = []
             cand_lists_for_chunk: List[List[str]] = []
+            exact_matches_for_chunk: Dict[int, List[str]] = defaultdict(list)
 
             for i in range(chunk_len):
                 c = chunk_s1_countries[i]
@@ -367,6 +368,18 @@ def run_streaming_inference(
                 cand_idxs = index.get_candidates_for_query(c, n, a, top_k=top_k)
                 cand_ids = [index.ids[ci] for ci in cand_idxs]
                 cand_lists_for_chunk.append(cand_ids)
+
+                # Cache exact normalized name+address matches while candidate
+                # indices are already available; avoid an O(N) ID lookup later.
+                if n and a:
+                    for ci in cand_idxs:
+                        cand_country = index.countries[ci]
+                        if (
+                            n == index.names[ci]
+                            and a == index.addresses[ci]
+                            and (not c or not cand_country or c == cand_country)
+                        ):
+                            exact_matches_for_chunk[i].append(index.ids[ci])
 
                 for ci in cand_idxs:
                     pair_s1_indices.append(i)
@@ -417,22 +430,8 @@ def run_streaming_inference(
 
                 # Deterministic high-confidence override: when both normalized
                 # business name and address are identical, retain the candidate
-                # even if probability gates reject it. This protects exact
-                # cross-source duplicates from entity-level ambiguity rules.
-                exact_matches = []
-                q_name = chunk_s1_names[s1_local_idx]
-                q_addr = chunk_s1_addrs[s1_local_idx]
-                q_country = chunk_s1_countries[s1_local_idx]
-                if q_name and q_addr:
-                    for cand_id in cand_ids:
-                        cand_idx = index.ids.tolist().index(cand_id)
-                        same_name = q_name == index.names[cand_idx]
-                        same_addr = q_addr == index.addresses[cand_idx]
-                        cand_country = index.countries[cand_idx]
-                        same_country = (not q_country or not cand_country or q_country == cand_country)
-                        if same_name and same_addr and same_country:
-                            exact_matches.append(cand_id)
-
+                # even if probability gates reject it.
+                exact_matches = exact_matches_for_chunk.get(s1_local_idx, [])
                 matches_by_s1[s1_local_idx] = list(dict.fromkeys(selected_matches + exact_matches))
 
             # Write chunk results to disk
