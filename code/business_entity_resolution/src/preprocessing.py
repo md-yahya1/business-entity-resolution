@@ -12,7 +12,24 @@ REQUIRED_COLUMNS = [
 ]
 
 _US_ZIP_RE = re.compile(r"\b(\d{5})(?:\s*-\s*(\d{4}))?\b")
-_UK_POSTAL_RE = re.compile(r"\b([a-z]{1,2}\d[a-z\d]?\s*\d[a-z]{2})\b", re.IGNORECASE)
+_UK_POSTAL_RE = re.compile(r"\\b([a-z]{1,2}\\d[a-z\\d]?\\s*\\d[a-z]{2})\\b", re.IGNORECASE)
+
+
+_COUNTRY_ALIASES = {
+    "us": "us", "usa": "us", "u s": "us",
+    "united states": "us", "united states of america": "us",
+    "in": "india", "ind": "india", "india": "india",
+    "fr": "france", "fra": "france", "france": "france",
+    "gb": "uk", "gbr": "uk", "uk": "uk", "united kingdom": "uk",
+}
+
+_US_STATE_CODES = {
+    "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga",
+    "hi", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md",
+    "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj",
+    "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc",
+    "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy", "dc",
+}
 
 
 def normalize_text(value: object) -> str:
@@ -66,40 +83,50 @@ def normalize_country(value: object) -> str:
 
     value = str(value)
     value = unicodedata.normalize("NFKC", value)
-    value = value.strip().lower()
-
-    return value
+    value = re.sub(r"\\s+", " ", value.strip().lower())
+    return _COUNTRY_ALIASES.get(value, value)
 
 
 def extract_address_hints(normalized_address: str) -> Dict[str, str]:
     """
-    Lightweight address parsing for blocking and match features.
-    Works on normalized address strings (lowercase, punctuation stripped).
+    Extract lightweight structured hints from a normalized address.
+
+    Postal codes are removed before state/city detection so a trailing
+    ZIP/UK postcode cannot hide a state token.
     """
     addr = normalized_address or ""
     hints = {"house_number": "", "postal_code": "", "city": "", "state": ""}
+    tokens = addr.split()
 
-    zip_match = _US_ZIP_RE.search(addr)
-    if zip_match:
-        hints["postal_code"] = zip_match.group(1)
+    postal_match = _US_ZIP_RE.search(addr)
+    if postal_match:
+        hints["postal_code"] = postal_match.group(1)
+        start_token = len(addr[:postal_match.start()].split())
+        end_token = len(addr[:postal_match.end()].split())
+        del tokens[start_token:end_token]
     else:
         uk = _UK_POSTAL_RE.search(addr)
         if uk:
             hints["postal_code"] = uk.group(1).replace(" ", "")
+            start_token = len(addr[:uk.start()].split())
+            end_token = len(addr[:uk.end()].split())
+            del tokens[start_token:end_token]
 
-    tokens = addr.split()
     if tokens and re.match(r"^\d+[a-z]?$", tokens[0]):
         hints["house_number"] = tokens[0]
 
-    if len(tokens) >= 2 and re.match(r"^[a-z]{2}$", tokens[-1]):
-        hints["state"] = tokens[-1]
-        city_tokens = tokens[-3:-1] if len(tokens) >= 3 else tokens[-2:-1]
-    else:
-        city_tokens = tokens[-2:] if len(tokens) >= 2 else tokens[-1:]
+    state_index = None
+    for idx in range(len(tokens) - 1, -1, -1):
+        if tokens[idx] in _US_STATE_CODES:
+            state_index = idx
+            hints["state"] = tokens[idx]
+            break
 
+    city_tokens = tokens[:state_index] if state_index is not None else tokens
     city_tokens = [
         t for t in city_tokens
-        if t and not t.isdigit() and t not in {"usa", "us", "uk", "in", "india"}
+        if t and not t.isdigit()
+        and t not in {"usa", "us", "uk", "in", "india"}
     ]
     if city_tokens:
         hints["city"] = city_tokens[-1]
