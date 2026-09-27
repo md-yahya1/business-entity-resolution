@@ -260,10 +260,10 @@ class CompactCandidateIndex:
         if len(pool) <= limit:
             return pool.astype(np.int32, copy=False)
 
-        # Stage-1 deterministic scoring. Unlike the old version, this uses
-        # the same fuzzy signals that the classifier sees, so a misspelling
-        # or reordered business name is less likely to be discarded before
-        # the ML model gets a chance to evaluate it.
+        # Stage 1: cheap blocking score over the full pool.
+        # Stage 2: fuzzy reranking is intentionally bounded to a small
+        # shortlist. This preserves the recall benefit of fuzzy retrieval
+        # without doing expensive RapidFuzz work over huge posting unions.
         score = np.zeros(len(pool), dtype=np.float32)
 
         score += (self.countries[pool] == country) * 1000.0
@@ -274,7 +274,38 @@ class CompactCandidateIndex:
         score += (self.state[pool] == state) * 75.0
 
         if name:
-            name_choices = self.names[pool].tolist()
+            prefix_hash = np.uint64(
+                _hash_keys(
+                    np.array([country], dtype=object),
+                    np.array([name[:3]], dtype=object),
+                )[0]
+            )
+            score += (
+                self._hash_country_prefix3[pool] == prefix_hash
+            ) * 20.0
+
+        score -= (
+            np.abs(self.name_len[pool] - len(name)).astype(np.float32)
+            * 0.25
+        )
+        score -= (
+            np.abs(self.addr_len[pool] - len(address)).astype(np.float32)
+            * 0.025
+        )
+
+        shortlist_size = min(len(pool), max(limit * 8, 64))
+        if shortlist_size < len(pool):
+            shortlist_pos = np.argpartition(
+                -score, shortlist_size - 1
+            )[:shortlist_size]
+        else:
+            shortlist_pos = np.arange(len(pool))
+
+        short_pool = pool[shortlist_pos]
+        short_score = score[shortlist_pos].copy()
+
+        if name and len(short_pool):
+            name_choices = self.names[short_pool].tolist()
             name_ratio = process.cpdist(
                 [name] * len(name_choices),
                 name_choices,
@@ -289,21 +320,11 @@ class CompactCandidateIndex:
                 workers=-1,
                 dtype=np.float32,
             )
-            score += name_ratio * 3.0
-            score += name_token * 2.0
+            short_score += name_ratio * 3.0
+            short_score += name_token * 2.0
 
-            prefix_hash = np.uint64(
-                _hash_keys(
-                    np.array([country], dtype=object),
-                    np.array([name[:3]], dtype=object),
-                )[0]
-            )
-            score += (
-                self._hash_country_prefix3[pool] == prefix_hash
-            ) * 20.0
-
-        if address:
-            address_choices = self.addresses[pool].tolist()
+        if address and len(short_pool):
+            address_choices = self.addresses[short_pool].tolist()
             addr_ratio = process.cpdist(
                 [address] * len(address_choices),
                 address_choices,
@@ -318,33 +339,14 @@ class CompactCandidateIndex:
                 workers=-1,
                 dtype=np.float32,
             )
-            score += addr_ratio * 1.25
-            score += addr_token * 0.50
-
-        score -= (
-            np.abs(self.name_len[pool] - len(name)).astype(np.float32)
-            * 0.25
-        )
-        score -= (
-            np.abs(self.addr_len[pool] - len(address)).astype(np.float32)
-            * 0.025
-        )
+            short_score += addr_ratio * 1.25
+            short_score += addr_token * 0.50
 
         take = np.argpartition(
-            -score,
-            min(limit, len(pool)) - 1,
+            -short_score,
+            min(limit, len(short_pool)) - 1,
         )[:limit]
-
-        selected = pool[take]
-        order = np.lexsort(
-            (self.ids[selected], -score[take])
-        )
+        selected = short_pool[take]
+        selected_score = short_score[take]
+        order = np.lexsort((self.ids[selected], -selected_score))
         return selected[order].astype(np.int32, copy=False)
-
-
-def build_index(
-    s2_df: pd.DataFrame,
-    s3_df: pd.DataFrame,
-    **kwargs,
-) -> CompactCandidateIndex:
-    return CompactCandidateIndex(s2_df, s3_df, **kwargs)
