@@ -255,6 +255,7 @@ def main():
             )
             all_pairs = []
             candidate_lists = []
+            pair_counts = np.zeros(end - base, dtype=np.int32)
             direct = {}
 
             for local, i in enumerate(
@@ -297,6 +298,7 @@ def main():
                 if len(exact) == 1:
                     direct[local] = index.ids[exact[0]]
                 else:
+                    pair_counts[local] = len(cands)
                     for j in cands:
                         all_pairs.append((local, j))
 
@@ -311,6 +313,7 @@ def main():
                 X = build_features(q, base, li, ri, index)
                 probs = model.predict_proba(X)[:, 1]
             chunk_matches = 0
+            prob_pos = 0
 
             for local, i in enumerate(
                 range(base, end)
@@ -321,18 +324,28 @@ def main():
                     ]
                     selected_candidates = candidate_lists[local][:args.output_candidate_limit]
                 else:
-                    vals = probs.get(
-                        local,
-                        [],
-                    )
-
-                    vals_sorted = sorted(
-                        vals,
-                        key=lambda x: (
-                            -x[1],
-                            x[0],
-                        ),
-                    )
+                    count = int(pair_counts[local])
+                    if count:
+                        pairs = all_pairs[prob_pos:prob_pos + count]
+                        pvals = probs[prob_pos:prob_pos + count]
+                        order = sorted(
+                            range(count),
+                            key=lambda k: (
+                                -float(pvals[k]),
+                                index.ids[pairs[k][1]],
+                            ),
+                        )
+                        vals_sorted = [
+                            (
+                                index.ids[pairs[k][1]],
+                                float(pvals[k]),
+                                pairs[k][1],
+                            )
+                            for k in order
+                        ]
+                        prob_pos += count
+                    else:
+                        vals_sorted = []
 
                     selected = select_entity_matches(
                         [x[0] for x in vals_sorted],
@@ -343,16 +356,11 @@ def main():
                         min_confident_single_match=0.88,
                     )
 
-                    # Keep the externally written candidate list compact.
                     selected_candidates = [
                         x[2]
-                        for x in vals_sorted[
-                            :args.output_candidate_limit
-                        ]
+                        for x in vals_sorted[:args.output_candidate_limit]
                     ]
 
-                    # If the entity has no scored candidates, retain the
-                    # retrieval ordering so the output is still useful.
                     if not selected_candidates:
                         selected_candidates = candidate_lists[local][
                             :args.output_candidate_limit
