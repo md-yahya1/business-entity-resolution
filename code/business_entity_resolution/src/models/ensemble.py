@@ -179,6 +179,20 @@ def _extended_voting_estimators(seed: int) -> List[Tuple[str, BaseEstimator]]:
     ]
 
 
+def build_hgb_voting_ensemble(seed: int) -> VotingClassifier:
+    """Compact HGB-only ensemble: three diverse HGB learners, no duplicate fits."""
+    estimators = [
+        ("hist", _hist_gradient_boosting(seed)),
+        ("hist_precision", _hist_gradient_boosting_precision(seed)),
+        ("hist_recall", _hist_gradient_boosting_recall(seed)),
+    ]
+    return VotingClassifier(
+        estimators=estimators,
+        voting="soft",
+        weights=[0.50, 0.25, 0.25],
+        n_jobs=-1,
+    )
+
 def build_soft_voting_ensemble(
     seed: int,
     weights: Optional[Sequence[float]] = None,
@@ -334,9 +348,7 @@ def build_candidate_models(seed: int, profile: str = "full") -> Dict[str, BaseEs
             "HistGradientBoosting": _hist_gradient_boosting(seed),
             "HistGradientBoostingPrecision": _hist_gradient_boosting_precision(seed),
             "HistGradientBoostingRecall": _hist_gradient_boosting_recall(seed),
-            "SoftVotingEnsemble": build_soft_voting_ensemble(
-                seed, weights=[0.50, 0.25, 0.25, 0.0, 0.0, 0.0]
-            ),
+            "HGBVotingEnsemble": build_hgb_voting_ensemble(seed),
         }
 
     if profile == "minimal":
