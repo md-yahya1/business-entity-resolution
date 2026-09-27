@@ -2,62 +2,100 @@
 
 ## Purpose
 
-Normalize business names, addresses, and countries before blocking and pair-feature extraction. The implementation is `code/business_entity_resolution/src/preprocessing.py`.
+Normalize the fields used by candidate generation and pairwise matching. The implementation is:
 
-## Inputs and Schema
+`code/business_entity_resolution/src/preprocessing.py`
 
-`preprocess_dataframe` accepts a pandas DataFrame and requires:
+## Required schema
+
+Each source record requires:
 
 | Column | Meaning |
 |---|---|
-| `entity_id` | Record identifier, retained unchanged |
+| `entity_id` | Source-specific record ID |
 | `business_name` | Raw business name |
 | `business_address` | Raw business address |
-| `country` | Raw country value |
+| `country` | Raw country |
 
-The repository's source TSVs are `train_source1.tsv`, `train_source2.tsv`, and `train_source3.tsv`; the checked workspace places them under `datasets/train/`. Test inputs, when available, use the same names under `datasets/test/`. Ground truth is kept separate from record features.
+Additional columns are preserved but are not used by the final laptop inference pipeline.
 
-Other input columns are retained but are not transformed. There are no city, state, postal-code, phone, email, or URL transformations.
+## Normalization
 
-## Pipeline and Transformations
+### Business name
 
-The function copies the DataFrame, raises `ValueError` if a required column is absent, fills null name/address/country values with empty strings, and appends normalized fields. It does not remove rows or columns.
+- missing values -> empty string
+- Unicode NFKC normalization
+- lowercase
+- punctuation -> spaces
+- repeated whitespace collapsed
+- surrounding whitespace removed
 
-| Output column | Transformation |
-|---|---|
-| `business_name_normalized` | String conversion, Unicode NFKC, lowercase, punctuation-to-space, whitespace collapse, trim |
-| `business_address_normalized` | String conversion, Unicode NFKC, lowercase, comma/semicolon/slash-to-space, remaining punctuation-to-space, whitespace collapse, trim |
-| `country_normalized` | String conversion, Unicode NFKC, lowercase, trim |
+### Business address
 
-Country aliases such as `US` and `USA` are not unified. Business suffixes are not expanded or removed. These conservative rules avoid unsupported equivalence assumptions.
+- missing values -> empty string
+- Unicode NFKC normalization
+- lowercase
+- comma, semicolon and slash -> spaces
+- remaining punctuation -> spaces
+- repeated whitespace collapsed
+- surrounding whitespace removed
 
-## Missing Values and Duplicates
+### Country
 
-Null values in the three text columns become `""` in both the raw and normalized columns. Missing identifiers are not repaired. Duplicate rows and duplicate IDs are neither removed nor reported; callers are responsible for identifier uniqueness.
+- missing values -> empty string
+- Unicode NFKC normalization
+- lowercase
+- repeated whitespace collapsed
+- common aliases canonicalized
 
-## Data Quality and Leakage
+Country canonicalization currently includes US/USA/United States, India/IN, France/FR, and UK/GB/United Kingdom.
 
-No general data-quality report is generated. The code validates required-column presence only; it does not report row counts, missingness, malformed values, or duplicate counts. Normalization is deterministic and has no fitted state, so it does not learn from labels or evaluation-set statistics. Keep ground-truth columns outside model features.
+## Address hint extraction
 
-## Output
+The normalized address is parsed into lightweight hints:
 
-The function returns the original DataFrame columns plus the three normalized columns listed above. It does not write a file.
+- `house_number`
+- `postal_code`
+- `state`
+- `city`
 
-## Execution and Tests
+Postal extraction supports US ZIP codes and UK-style postcodes. The parser removes the postal-code tokens before scanning for a trailing US state code.
 
-There is no `scripts/preprocess.py` in this repository. Call the function from Python; training and inference modules also call it internally:
+The city contract intentionally remains a single-token city hint because the saved 13-feature model was trained with this representation.
 
-```python
-from business_entity_resolution.src.preprocessing import preprocess_dataframe
+## Missing values
 
-processed = preprocess_dataframe(records)
+Missing name, address and country values are converted to `""`. Missing entity IDs are not repaired.
+
+## Duplicates
+
+Rows and entity IDs are not automatically deduplicated. The inference pipeline assumes source IDs are suitable for submission.
+
+## Leakage
+
+Preprocessing is deterministic and does not fit statistics from the labels. Ground truth remains outside the feature matrix.
+
+## Tests
+
+```powershell
+pytest tests/test_preprocessing.py -q
 ```
 
-Run `pytest tests/test_preprocessing.py` to validate normalization and required-column behavior.
+The regression tests verify:
+
+- Unicode/null normalization
+- country alias canonicalization
+- ZIP extraction
+- state extraction when ZIP follows the state
+- city extraction
+- required-column validation
 
 ## Limitations
 
-- Only name, address, and country are normalized.
-- Country aliases, legal suffixes, and contact fields are not standardized.
-- Duplicate handling, a standalone CLI, and a data-quality report are not implemented.
-- Some scripts default to `dataset/`, while the checked workspace data directory is `datasets/`.
+This stage does not:
+
+- infer missing business names
+- infer missing addresses
+- resolve duplicate entity IDs
+- standardize every country spelling/code in existence
+- create phone/email/domain features
