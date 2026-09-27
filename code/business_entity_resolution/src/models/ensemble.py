@@ -63,10 +63,36 @@ def _hist_gradient_boosting_alt(seed: int) -> HistGradientBoostingClassifier:
     )
 
 
+def _hist_gradient_boosting_precision(seed: int) -> HistGradientBoostingClassifier:
+    """Higher-regularization HGB variant aimed at reducing false positives."""
+    return HistGradientBoostingClassifier(
+        max_iter=700,
+        max_depth=8,
+        learning_rate=0.025,
+        min_samples_leaf=10,
+        l2_regularization=0.20,
+        max_bins=255,
+        random_state=seed + 31,
+    )
+
+
+def _hist_gradient_boosting_recall(seed: int) -> HistGradientBoostingClassifier:
+    """Slightly more expressive HGB variant to preserve hard positives."""
+    return HistGradientBoostingClassifier(
+        max_iter=600,
+        max_depth=10,
+        learning_rate=0.035,
+        min_samples_leaf=5,
+        l2_regularization=0.06,
+        max_bins=255,
+        random_state=seed + 47,
+    )
+
+
 def _extra_trees(seed: int) -> ExtraTreesClassifier:
     return ExtraTreesClassifier(
-        n_estimators=250,
-        max_depth=18,
+        n_estimators=500,
+        max_depth=20,
         min_samples_leaf=2,
         class_weight="balanced",
         random_state=seed,
@@ -76,8 +102,8 @@ def _extra_trees(seed: int) -> ExtraTreesClassifier:
 
 def _random_forest(seed: int) -> RandomForestClassifier:
     return RandomForestClassifier(
-        n_estimators=250,
-        max_depth=18,
+        n_estimators=400,
+        max_depth=20,
         min_samples_leaf=2,
         class_weight="balanced",
         random_state=seed,
@@ -87,9 +113,9 @@ def _random_forest(seed: int) -> RandomForestClassifier:
 
 def _gradient_boosting(seed: int) -> GradientBoostingClassifier:
     return GradientBoostingClassifier(
-        n_estimators=200,
-        max_depth=7,
-        learning_rate=0.06,
+        n_estimators=350,
+        max_depth=5,
+        learning_rate=0.035,
         subsample=0.85,
         random_state=seed,
     )
@@ -125,6 +151,8 @@ def get_base_learner_specs() -> Tuple[BaseLearnerSpec, ...]:
     """Ordered catalog of diverse base learners for ensembles."""
     return (
         BaseLearnerSpec("hist", _hist_gradient_boosting),
+        BaseLearnerSpec("hist_precision", _hist_gradient_boosting_precision),
+        BaseLearnerSpec("hist_recall", _hist_gradient_boosting_recall),
         BaseLearnerSpec("extra", _extra_trees),
         BaseLearnerSpec("rf", _random_forest),
         BaseLearnerSpec("gb", _gradient_boosting),
@@ -141,7 +169,7 @@ def _tree_voting_estimators(seed: int) -> List[Tuple[str, BaseEstimator]]:
     return [
         (spec.name, spec.factory(seed))
         for spec in get_base_learner_specs()
-        if spec.name in {"hist", "extra", "rf", "gb"}
+        if spec.name in {"hist", "hist_precision", "hist_recall", "extra", "rf", "gb"}
     ]
 
 
@@ -310,6 +338,8 @@ def build_candidate_models(seed: int, profile: str = "full") -> Dict[str, BaseEs
 
     display_names = {
         "hist": "HistGradientBoosting",
+        "hist_precision": "HistGradientBoostingPrecision",
+        "hist_recall": "HistGradientBoostingRecall",
         "extra": "ExtraTrees",
         "rf": "RandomForest",
         "gb": "GradientBoosting",
@@ -320,7 +350,7 @@ def build_candidate_models(seed: int, profile: str = "full") -> Dict[str, BaseEs
 
     ensembles = {
         "SoftVotingEnsemble": build_soft_voting_ensemble(
-            seed, weights=[0.40, 0.25, 0.20, 0.15]
+            seed, weights=[0.38, 0.16, 0.16, 0.15, 0.10, 0.05]
         ),
         "StackingEnsemble_HGB": build_stacking_ensemble(
             seed,
