@@ -196,7 +196,7 @@ def main():
         mp,
         "w",
         encoding="utf-8",
-        buffering=1,
+        buffering=1024 * 1024,
     ) as fm, open(
         cp,
         "w",
