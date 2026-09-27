@@ -2,71 +2,113 @@
 
 ## Purpose
 
-Candidate generation reduces the number of record comparisons passed to feature extraction and the classifier. It does not decide final matches.
+Candidate generation is the recall ceiling of the final entity-resolution pipeline. It narrows the 10M+ Source-2/Source-3 records to a small deterministic candidate set for each Source-1 record before the trained classifier runs.
 
-## Position in Pipeline
+The production implementation is:
 
-```text
-Source TSVs -> preprocessing -> candidates -> pair features -> classifier
-            -> matching_results.tsv and candidate_pairs.tsv
+`code/business_entity_resolution/src/blocking/laptop_final.py`
+
+The final submission CLI is:
+
+`scripts/generate_submission_laptop_final.py`
+
+## Final inference blocking
+
+The blocker builds compact sorted uint64 posting indexes over Source 2 + Source 3. Each index is scoped by normalized country.
+
+The active retrieval passes are:
+
+1. Exact normalized business name.
+2. First three characters of normalized business name.
+3. First selective non-generic business-name token.
+4. Exact postal code.
+5. Exact house number.
+6. Exact city hint.
+7. First selective non-generic address token.
+
+The block results are unioned and deduplicated. If more than `retrieval-limit` candidates remain, a cheap deterministic score ranks them before the ML stage.
+
+Ranking signals are, in order of importance:
+
+- exact normalized business name
+- exact normalized address
+- exact postal code
+- exact house number
+- exact city
+- exact selective address token
+- exact state
+- same name prefix
+- name/address length differences
+
+No RapidFuzz similarity is calculated during blocking. This is intentional: fuzzy scoring at this stage previously reduced throughput too heavily for the laptop-scale run.
+
+## Why multiple blocks are used
+
+Blocking is a hard filter: a true pair that is never retrieved cannot be recovered by the classifier. Multiple overlapping blocking rules therefore provide different failure paths while keeping the expensive fuzzy features limited to the final shortlist.
+
+The address-token pass is particularly useful when a business name changes substantially but location text remains similar. Exact address is also given a strong cheap ranking weight so an address-supported candidate is not displaced by a weak name-prefix candidate.
+
+## Limits
+
+Default production settings:
+
+- `posting-cap=64`
+- `exact-cap=32`
+- `retrieval-limit=10`
+- `output-candidate-limit=10`
+
+These limits are deliberately small for laptop-scale inference. Increasing them changes both runtime and the downstream candidate population and must be benchmarked before a full run.
+
+## Address hints
+
+`extract_address_hints()` extracts:
+
+- house number
+- postal code
+- state
+- city
+
+Postal codes are removed before state detection. This fixes a previous case where an address ending in `<state> <ZIP>` could fail to expose the state because the ZIP was the final token.
+
+Country values are canonicalized for common aliases such as:
+
+- `US`, `USA`, `United States` -> `us`
+- `IN`, `India` -> `india`
+- `FR`, `France` -> `france`
+- `GB`, `UK`, `United Kingdom` -> `uk`
+
+## Candidate recall evaluation
+
+Candidate recall must be measured independently of classifier precision/recall.
+
+For a Source-1 entity:
+
+`candidate recall = true matches present in candidates / total true matches`
+
+The previous 5,000-entity diagnostic, before the current blocker fixes, measured:
+
+- candidate recall: 32.9110%
+- final precision: 48.0508%
+- final recall: 28.9656%
+- macro F0.5: 39.8709%
+
+Those are historical baseline measurements, not results for the current branch. The corrected pipeline must be re-benchmarked before the full 1.7M test run.
+
+## Tests
+
+The final blocker is covered by `tests/test_blocking.py`, including:
+
+- recovery through an address token when the name is different
+- preference for an exact-address candidate over a name-prefix decoy
+
+Run:
+
+```powershell
+pytest tests/test_blocking.py tests/test_preprocessing.py -q
 ```
 
-There are separate training and inference implementations: `candidate_generator.generate_candidate_pairs` and `inference_blocking.generate_inference_candidates`. Current `main` also contains `candidate_generator.generate_test_candidates`, a helper that is not called by either inference CLI.
+Then run the full suite:
 
-## Inputs
-
-Each source DataFrame requires `entity_id`, `business_name`, `business_address`, and `country`. Ground truth is optional for training and has `source1_entity_id` plus comma-separated `matched_entity_ids`. The checked workspace stores source files under `datasets/train/` and `datasets/test/`; some scripts retain a legacy `dataset/` default.
-
-## Training Pair Generation
-
-`scripts/train.py` calls `generate_candidate_pairs` when its configured training-feature file is absent. Ground-truth matches provide positive pairs, capped by `--max-positives` (default 10,000). The function samples up to 60,000 records for negative-pair blocking, groups them by normalized country and first character of normalized name, samples up to 40 records per block, and creates a limited set of nearby index pairs until `--max-negatives` (default 30,000) is reached. The random seed defaults to 42. Pairs include raw source attributes, `label`, and `entity_group_id` for training.
-
-This is a training sampler, not the inference candidate strategy. Negative pairs may be drawn from any source combination. Pair deduplication uses the unordered pair of IDs; positive pairs are added from ground truth even if the names would not share a blocking key.
-
-`generate_test_candidates` is an additional helper on current `main`. It blocks on exact normalized country and first full name token, then emits up to 15 pairs per Source 1 record by default. It does not use address tokens and currently sets `label=0` and `entity_group_id=0` on output rows. It is not the path used by `scripts/generate_submission.py`; do not treat its placeholder label as a ground-truth prediction.
-
-## Inference Blocking Strategy
-
-`generate_inference_candidates` preprocesses each source and returns one row for every Source 1 ID. Only Source 2 and Source 3 IDs can be candidates.
-
-For each Source 1 record, the implementation:
-
-1. Adds records sharing normalized country and the first character of normalized business name.
-2. Builds separate same-country postings for each normalized name token and address token of at least three characters. It selects up to two rare postings whose size is at most `country_fallback_cap` (default 500), sorted by posting size, field, then token.
-3. Unions these IDs and removes duplicates while preserving insertion order.
-4. If the union is empty, takes the first up to 500 records from the same-country index.
-5. Ranks the resulting pool by the larger of name and address `token_set_ratio` and retains `top_k` (default 25).
-
-The bounded candidate set is a recall/compute tradeoff. Prefix, country, posting-size, fallback-order, and top-k limits can exclude true matches. An unseen country produces no candidates; an empty candidate list is allowed and is needed to represent a singleton.
-
-## Inference Output and Submission Files
-
-`generate_inference_candidates` returns `source1_entity_id` and a list-valued `candidate_entity_ids`. `expand_candidates_to_pairs` expands those lists into Source 1/Source 2-or-3 raw attribute pairs for feature extraction.
-
-`scripts/generate_submission.py` writes:
-
-- `candidate_pairs.tsv`: `source1_entity_id`, `candidate_entity_ids`
-- `matching_results.tsv`: `source1_entity_id`, `matched_entity_ids`
-
-Both files contain a row for every Source 1 ID, including empty lists. Run it with `--data-dir`, `--model`, `--output-dir`, and optionally `--top-k` or `--threshold`. The threshold defaults to model metadata. The script checks ID validity, duplicate IDs in lists, and that every predicted match is in that entity's candidate list.
-
-## Recall and Evaluation Status
-
-The bounded training-data diagnostic previously run on the first 100,000 rows of each source and first 250,000 ground-truth rows contained 741 true pairs; the current blocker retrieved 705 at `top_k=25` (95.1% candidate recall on that slice). This is not an unbiased full-data estimate and is not the competition score.
-
-The competition metric is macro entity-level $F_{0.5}$ over every Source 1 entity, including singletons. The last user-reported overall score is 0.056, but the evaluation/test split is absent from this checkout, so a new official macro $F_{0.5}$ score cannot be calculated here. Candidate recall must not be substituted for that score.
-
-## Validation and Limitations
-
-Run `pytest tests/test_blocking.py`. The test covers recovery of a differently named record through address tokens. The full suite is `pytest tests/`. The current index does not use phonetic or character n-gram retrieval; common name/address tokens can be excluded by the posting cap, and fallback selection can depend on input row order.
-
-## Handoff
-
-The submission generator expands candidates, computes the 19 pair-comparison features, and applies the saved classifier and threshold.
-
-```text
-INPUT: Source 1, Source 2, and Source 3 TSV files
-PROCESS: normalize -> prefix and selective-token blocks -> rank/cap -> feature extraction -> classifier
-OUTPUT: output/candidate_pairs.tsv and output/matching_results.tsv
-NEXT STAGE: Feature extraction and model-based match prediction
+```powershell
+pytest tests/ -q
 ```
