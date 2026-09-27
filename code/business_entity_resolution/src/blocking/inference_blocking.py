@@ -133,11 +133,7 @@ class FastCandidateIndex:
         country: str,
         name: str,
         address: str,
-<<<<<<< ours
-        top_k: int = 50,
-=======
         top_k: int = 40,
->>>>>>> theirs
     ) -> List[int]:
         """Union multiple blocking keys, then rank down to top_k."""
         if not country:
