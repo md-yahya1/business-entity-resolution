@@ -61,7 +61,12 @@ def main():
         type=str,
         default="under_1h",
         choices=("under_1h", "full", "fast"),
-        help="under_1h = HGB-focused large-dataset profile; fast = core ensembles; full = all stacks including extended weight tuning",
+        help="under_1h = single compact HGB for 1M+ rows; fast = core ensembles; full = all stacks including extended weight tuning",
+    )
+    parser.add_argument(
+        "--skip-feature-cache-write",
+        action="store_true",
+        help="Do not write the generated feature matrix back to disk (useful when training directly from a large existing table).",
     )
 
     args = parser.parse_args()
@@ -115,11 +120,14 @@ def main():
 
         df = pd.concat([pairs_df, features_df], axis=1)
 
-        print(f"Saving extracted candidate features dataset to: {input_file}")
-        if input_file.endswith(".parquet"):
-            df.to_parquet(input_file, index=False)
+        if not args.skip_feature_cache_write:
+            print(f"Saving extracted candidate features dataset to: {input_file}")
+            if input_file.endswith(".parquet"):
+                df.to_parquet(input_file, index=False)
+            else:
+                df.to_csv(input_file, sep="\t", index=False)
         else:
-            df.to_csv(input_file, sep="\t", index=False)
+            print("Skipping feature-cache write (--skip-feature-cache-write).")
 
     print(f"\nTotal candidate dataset shape: {df.shape}")
     print(f"Class distribution:\n{df['label'].value_counts().to_dict()}")
