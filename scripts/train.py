@@ -59,7 +59,7 @@ def main():
     parser.add_argument(
         "--tuning-profile",
         type=str,
-        default="fast",
+        default="full",
         choices=("full", "fast"),
         help="fast = core ensembles (default); full = all stacks including extended weight tuning",
     )
@@ -82,6 +82,8 @@ def main():
     else:
         print("Candidate feature file not found. Generating candidate pairs from raw dataset...")
         train_dir = "dataset/train"
+        if not os.path.isdir(train_dir):
+            train_dir = "datasets/train"
         s1_path = os.path.join(train_dir, "train_source1.tsv")
         s2_path = os.path.join(train_dir, "train_source2.tsv")
         s3_path = os.path.join(train_dir, "train_source3.tsv")
