@@ -6,7 +6,6 @@ import pandas as pd
 import numpy as np
 import rapidfuzz.fuzz as fuzz
 import rapidfuzz.distance.JaroWinkler as jw
-import rapidfuzz.distance.Levenshtein as lev
 from ..preprocessing import (
     normalize_business_name,
     normalize_address,
@@ -89,6 +88,8 @@ def _compute_feature_vector(
     n2: str,
     a2: str,
     c2: str,
+    hints1: Dict[str, str] = None,
+    hints2: Dict[str, str] = None,
 ) -> np.ndarray:
     out = np.empty(len(FEATURE_NAMES), dtype=np.float32)
 
@@ -96,10 +97,16 @@ def _compute_feature_vector(
     addr_miss = 1.0 if not a1 or not a2 else 0.0
     country_miss = 1.0 if not c1 or not c2 else 0.0
 
-    hints1 = extract_address_hints(a1)
-    hints2 = extract_address_hints(a2)
+    if hints1 is None:
+        hints1 = extract_address_hints(a1)
+    if hints2 is None:
+        hints2 = extract_address_hints(a2)
 
-    out[0] = fuzz.ratio(n1, n2) / 100.0
+    # Reuse the edit-distance signal for both ratio and Levenshtein features.
+    name_edit_sim = fuzz.ratio(n1, n2) / 100.0
+    addr_edit_sim = fuzz.ratio(a1, a2) / 100.0
+
+    out[0] = name_edit_sim
     out[1] = fuzz.partial_ratio(n1, n2) / 100.0
     out[2] = fuzz.token_sort_ratio(n1, n2) / 100.0
     out[3] = fuzz.token_set_ratio(n1, n2) / 100.0
@@ -118,9 +125,9 @@ def _compute_feature_vector(
     out[16] = float(abs(len(a1) - len(a2)))
     out[17] = name_miss
     out[18] = addr_miss
-    out[19] = float(lev.normalized_similarity(n1, n2))
+    out[19] = name_edit_sim
     out[20] = fuzz.token_sort_ratio(a1, a2) / 100.0
-    out[21] = float(lev.normalized_similarity(a1, a2))
+    out[21] = addr_edit_sim
     out[22] = _bag_cosine(n1, n2)
     out[23] = _bag_cosine(a1, a2)
     out[24] = _exact_hint_match(hints1["city"], hints2["city"])
@@ -150,6 +157,22 @@ def compute_pair_features(
     return {name: float(vec[i]) for i, name in enumerate(FEATURE_NAMES)}
 
 
+def _normalize_unique(values: Sequence[str], normalizer) -> np.ndarray:
+    """Normalize each unique input value once, then restore original order."""
+    arr = np.asarray(values, dtype=object)
+    codes, uniques = pd.factorize(arr, sort=False)
+    normalized_uniques = [normalizer(v) for v in uniques]
+    return np.asarray(normalized_uniques, dtype=object)[codes]
+
+
+def _precompute_hints(values: Sequence[str]) -> np.ndarray:
+    """Parse address hints once per unique normalized address."""
+    arr = np.asarray(values, dtype=object)
+    codes, uniques = pd.factorize(arr, sort=False)
+    hint_uniques = [extract_address_hints(v) for v in uniques]
+    return np.asarray(hint_uniques, dtype=object)[codes]
+
+
 def compute_features_batch_fast(
     n1_col: Sequence[str],
     a1_col: Sequence[str],
@@ -163,23 +186,30 @@ def compute_features_batch_fast(
     n_samples = len(n1_col)
     out = np.empty((n_samples, len(FEATURE_NAMES)), dtype=np.float32)
 
+    if are_pre_normalized:
+        n1_norm, a1_norm, c1_norm = map(lambda x: np.asarray(x, dtype=object),
+                                        (n1_col, a1_col, c1_col))
+        n2_norm, a2_norm, c2_norm = map(lambda x: np.asarray(x, dtype=object),
+                                        (n2_col, a2_col, c2_col))
+    else:
+        # The same entity values occur in many candidate pairs. Factorizing
+        # first avoids Unicode/regex normalization millions of times.
+        n1_norm = _normalize_unique(n1_col, normalize_business_name)
+        a1_norm = _normalize_unique(a1_col, normalize_address)
+        c1_norm = _normalize_unique(c1_col, normalize_country)
+        n2_norm = _normalize_unique(n2_col, normalize_business_name)
+        a2_norm = _normalize_unique(a2_col, normalize_address)
+        c2_norm = _normalize_unique(c2_col, normalize_country)
+
+    h1 = _precompute_hints(a1_norm)
+    h2 = _precompute_hints(a2_norm)
+
     for i in range(n_samples):
-        n1 = n1_col[i]
-        a1 = a1_col[i]
-        c1 = c1_col[i]
-        n2 = n2_col[i]
-        a2 = a2_col[i]
-        c2 = c2_col[i]
-
-        if not are_pre_normalized:
-            n1 = normalize_business_name(n1)
-            n2 = normalize_business_name(n2)
-            a1 = normalize_address(a1)
-            a2 = normalize_address(a2)
-            c1 = normalize_country(c1)
-            c2 = normalize_country(c2)
-
-        out[i] = _compute_feature_vector(n1, a1, c1, n2, a2, c2)
+        out[i] = _compute_feature_vector(
+            n1_norm[i], a1_norm[i], c1_norm[i],
+            n2_norm[i], a2_norm[i], c2_norm[i],
+            h1[i], h2[i],
+        )
 
     return out
 
