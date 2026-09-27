@@ -12,7 +12,7 @@ REQUIRED_COLUMNS = [
 ]
 
 _US_ZIP_RE = re.compile(r"\b(\d{5})(?:\s*-\s*(\d{4}))?\b")
-_UK_POSTAL_RE = re.compile(r"\\b([a-z]{1,2}\\d[a-z\\d]?\\s*\\d[a-z]{2})\\b", re.IGNORECASE)
+_UK_POSTAL_RE = re.compile(r"\b([a-z]{1,2}\d[a-z\d]?\s*\d[a-z]{2})\b", re.IGNORECASE)
 
 
 _COUNTRY_ALIASES = {
@@ -83,7 +83,7 @@ def normalize_country(value: object) -> str:
 
     value = str(value)
     value = unicodedata.normalize("NFKC", value)
-    value = re.sub(r"\\s+", " ", value.strip().lower())
+    value = re.sub(r"\s+", " ", value.strip().lower())
     return _COUNTRY_ALIASES.get(value, value)
 
 
