@@ -71,6 +71,13 @@ def prepare_s1(df):
             ],
             dtype=object,
         ),
+        "address_token": np.array(
+            [
+                selective_token(x)
+                for x in s.business_address_normalized.fillna("").astype(str)
+            ],
+            dtype=object,
+        ),
     }
 
 
@@ -246,6 +253,10 @@ def main():
             h_city = _hash_keys(
                 cc,
                 q["city"][base:end],
+            )
+            h_address_token = _hash_keys(
+                cc,
+                q["address_token"][base:end],
             )
             h_address_token = _hash_keys(
                 cc,
