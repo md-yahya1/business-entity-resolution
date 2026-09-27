@@ -334,7 +334,7 @@ def main():
                     selected = [
                         direct[local]
                     ]
-                    selected_candidates = candidate_lists[local]
+                    selected_candidates = candidate_lists[local][:args.output_candidate_limit]
                 else:
                     vals = probs.get(
                         local,
