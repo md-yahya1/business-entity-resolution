@@ -1,66 +1,86 @@
 # Business Entity Resolution
 
-This repository matches Source 1 business records to candidate records in Sources 2 and 3. It contains text normalization, pairwise feature extraction, model training and inference, plus submission-file generation.
+This repository resolves Source-1 business records against Source-2 and Source-3 records at laptop scale.
 
-## Pipeline
+## Current production pipeline
 
-```text
-Source TSVs -> normalize fields -> generate candidates -> compute pair features
-            -> train or load classifier -> emit matched IDs for every Source 1 ID
-```
+Source TSVs -> deterministic preprocessing -> multi-pass compact blocking -> <=10 candidates per Source-1 entity -> 13 pairwise features -> saved HistGradientBoosting model -> entity-level decision rules -> matching_results.tsv + candidate_pairs.tsv.
 
-Training pair generation and inference candidate generation are separate paths. Training uses labeled ground truth to create positive examples and sampled negatives. Inference does not use labels: it blocks Source 1 records against Sources 2 and 3, scores candidate pairs, and writes grouped output files.
+The current production path is the tune/laptop-final-inference branch and is documented in docs/FINAL_INFERENCE.md.
 
 ## Setup
 
-Install dependencies and run tests:
+Windows PowerShell:
 
-```bash
-pip install -r requirements.txt
-pytest tests/
-```
+    python -m venv .venv
+    .venv\Scripts\Activate.ps1
+    pip install -r requirements.txt
 
-The source data in this workspace is under `datasets/train/` and `datasets/test/`. The training and prediction scripts currently use some `dataset/...` singular defaults; provide existing feature files explicitly or align the data directory before relying on those fallback paths.
+Run tests:
 
-## Training
+    pytest tests/ -q
 
-Train from an existing candidate-feature file, or let the script attempt to build one from its configured raw-data path:
+## Final saved model
 
-```bash
-python scripts/train.py --input artifacts/candidates/training_features.parquet --output models/entity_resolution_model.joblib
-```
+models/laptop_final/
 
-Training compares Logistic Regression, Random Forest, Gradient Boosting, Extra Trees, and HistGradientBoosting using validation pairwise F1. Current GitHub `main` metadata describes a HistGradientBoosting model with a pairwise-F1 decision threshold of `0.62`. Its saved pairwise test F1 is `0.9987`; this is not the entity-level leaderboard score.
+The saved classifier is a HistGradientBoostingClassifier using 13 features:
 
-## Pairwise Inference
+    name_ratio
+    name_token_set_ratio
+    address_ratio
+    address_token_set_ratio
+    country_exact_match
+    name_exact_match
+    address_exact_match
+    city_exact_match
+    postal_exact_match
+    house_number_exact_match
+    state_exact_match
+    name_char_len_diff
+    address_char_len_diff
 
-For a file containing candidate pairs or precomputed features:
+Saved pairwise validation metrics are precision 99.6730%, recall 98.4657%, F0.5 99.4292%, F1 99.0657%, and accuracy 98.9800%. These are pairwise metrics, not the final entity-level challenge score.
 
-```bash
-python scripts/predict.py --model models/entity_resolution_model.joblib --input artifacts/candidates/test_features.parquet --output output/predictions.tsv
-```
+## Candidate generation
 
-This writes detailed pair predictions and a basic grouped match file. For submission-format files covering every Source 1 entity, use the submission generator instead.
+The final blocker uses cheap, same-country posting indexes for exact name, name prefix, selective name token, postal code, house number, city, and selective address token.
 
-## Submission Generation
+Candidates are unioned, deduplicated, and cheaply ranked. Fuzzy similarity is deliberately not used during blocking because the full dataset must remain practical on a laptop.
 
-With `test_source1.tsv`, `test_source2.tsv`, and `test_source3.tsv` present in the data directory:
+Default retrieval is 10 internal candidates and 10 output candidates per Source-1 entity.
 
-```bash
-python scripts/generate_submission.py --data-dir datasets/test --model models/entity_resolution_model.joblib --output-dir output --top-k 25
-```
+## Benchmark before full inference
 
-The script writes `matching_results.tsv` and `candidate_pairs.tsv`. It includes one row for every Source 1 entity, including entities with empty candidate or match lists, and performs basic output validation.
+Never spend the full test-run time before checking the exact production pipeline on 5,000 training entities.
 
-## Evaluation Metric
+    python scripts/generate_submission_laptop_final.py --data-dir dataset/train --source1-file train_source1.tsv --source2-file train_source2.tsv --source3-file train_source3.tsv --limit 5000 --chunk-size 5000 --retrieval-limit 10 --output-candidate-limit 10 --output-dir output/final_fast_benchmark
 
-The challenge score is macro-averaged entity-level $F_{0.5}$: compute per-entity precision and recall from the predicted and true match sets, score each Source 1 entity, then average across the full evaluation set. Correctly predicting an empty list for a singleton scores `1`; predicting any match for a singleton scores `0`.
+Then evaluate the generated files against dataset/train/train_ground_truth.tsv.
 
-The last user-reported overall score is **0.056**; it has not been recalculated as macro $F_{0.5}$ from the current checkout. The evaluation split is not present under `datasets/test`, so no new official macro score can be verified locally. The bounded training-sample candidate-recall measurement and the saved pairwise F1 are different metrics and must not be reported as the final score.
+Remember:
+
+    pairwise model quality != candidate recall != final entity-level macro F0.5
+
+A missed candidate cannot be recovered by the classifier.
+
+## Full inference
+
+After the benchmark has been reviewed:
+
+    python scripts/generate_submission_laptop_final.py --data-dir dataset/test --source1-file test_source1.tsv --source2-file test_source2.tsv --source3-file test_source3.tsv --chunk-size 50000 --retrieval-limit 10 --output-candidate-limit 10 --output-dir output/laptop_final_submission
+
+Output:
+
+    output/laptop_final_submission/matching_results.tsv
+    output/laptop_final_submission/candidate_pairs.tsv
+
+Every Source-1 entity should have one output row.
 
 ## Documentation
 
-- [Model training](docs/MODEL_TRAINING.md)
-- [Data preprocessing](docs/DATA_PREPROCESSING.md)
-- [Candidate generation](docs/CANDIDATE_GENERATION.md)
-- [Pipeline overview](PROJECT_EXPLANATION.md)
+- docs/DATA_PREPROCESSING.md
+- docs/CANDIDATE_GENERATION.md
+- docs/MODEL_TRAINING.md
+- docs/FINAL_INFERENCE.md
+- PROJECT_EXPLANATION.md
