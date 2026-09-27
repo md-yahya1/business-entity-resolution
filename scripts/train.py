@@ -59,9 +59,9 @@ def main():
     parser.add_argument(
         "--tuning-profile",
         type=str,
-        default="full",
-        choices=("full", "fast"),
-        help="fast = core ensembles (default); full = all stacks including extended weight tuning",
+        default="under_1h",
+        choices=("under_1h", "full", "fast"),
+        help="under_1h = HGB-focused large-dataset profile; fast = core ensembles; full = all stacks including extended weight tuning",
     )
 
     args = parser.parse_args()
