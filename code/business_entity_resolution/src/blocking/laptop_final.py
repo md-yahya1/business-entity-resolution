@@ -130,33 +130,31 @@ class CompactCandidateIndex:
         self.n = n
         self.build_seconds = time.time() - t0
 
-    def _key(self, country: str, value: str) -> np.uint64:
-        if not country or not value:
-            return np.uint64(0)
-        return pd.util.hash_pandas_object(
-            pd.DataFrame({"c": [country], "v": [value]}), index=False
-        ).iloc[0]
-
     def candidates(self, country: str, name: str, address: str,
                    postal: str, house: str, city: str, state: str,
-                   limit: int = 10) -> np.ndarray:
+                   limit: int = 10, hashes=None) -> np.ndarray:
         if not country:
             return np.empty(0, np.int32)
 
+        if hashes is None:
+            values = np.array([name, name[:3], selective_token(name), postal, house, city], dtype=object)
+            hashes = pd.util.hash_pandas_object(
+                pd.DataFrame({"c": np.repeat(country, len(values)), "v": values}), index=False
+            ).to_numpy(dtype=np.uint64)
+        h_name, h_prefix, h_token, h_postal, h_house, h_city = hashes
         blocks = []
         if name:
-            blocks.append(self.exact_name.lookup(self._key(country, name)))
+            blocks.append(self.exact_name.lookup(h_name))
             if len(name) >= 3:
-                blocks.append(self.prefix3.lookup(self._key(country, name[:3])))
-            token = selective_token(name)
-            if token:
-                blocks.append(self.first_token.lookup(self._key(country, token)))
+                blocks.append(self.prefix3.lookup(h_prefix))
+            if selective_token(name):
+                blocks.append(self.first_token.lookup(h_token))
         if postal:
-            blocks.append(self.postal_index.lookup(self._key(country, postal)))
+            blocks.append(self.postal_index.lookup(h_postal))
         if house:
-            blocks.append(self.house_index.lookup(self._key(country, house)))
+            blocks.append(self.house_index.lookup(h_house))
         if city:
-            blocks.append(self.city_index.lookup(self._key(country, city)))
+            blocks.append(self.city_index.lookup(h_city))
 
         blocks = [x for x in blocks if len(x)]
         if not blocks:
