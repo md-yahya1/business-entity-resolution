@@ -406,7 +406,7 @@ def run_streaming_inference(
 
             for s1_local_idx, cand_ids in ids_by_s1.items():
                 entity_probs = probs_by_s1[s1_local_idx]
-                matches_by_s1[s1_local_idx] = select_entity_matches(
+                selected_matches = select_entity_matches(
                     cand_ids,
                     entity_probs,
                     match_threshold=threshold,
@@ -414,6 +414,26 @@ def run_streaming_inference(
                     min_single_match_margin=min_single_match_margin,
                     min_confident_single_match=min_confident_single_match,
                 )
+
+                # Deterministic high-confidence override: when both normalized
+                # business name and address are identical, retain the candidate
+                # even if probability gates reject it. This protects exact
+                # cross-source duplicates from entity-level ambiguity rules.
+                exact_matches = []
+                q_name = chunk_s1_names[s1_local_idx]
+                q_addr = chunk_s1_addrs[s1_local_idx]
+                q_country = chunk_s1_countries[s1_local_idx]
+                if q_name and q_addr:
+                    for cand_id in cand_ids:
+                        cand_idx = index.ids.tolist().index(cand_id)
+                        same_name = q_name == index.names[cand_idx]
+                        same_addr = q_addr == index.addresses[cand_idx]
+                        cand_country = index.countries[cand_idx]
+                        same_country = (not q_country or not cand_country or q_country == cand_country)
+                        if same_name and same_addr and same_country:
+                            exact_matches.append(cand_id)
+
+                matches_by_s1[s1_local_idx] = list(dict.fromkeys(selected_matches + exact_matches))
 
             # Write chunk results to disk
             chunk_matches = 0
