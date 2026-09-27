@@ -174,7 +174,12 @@ class CompactCandidateIndex:
         score += (self.city[pool] == city) * 100.0
         score += (self.state[pool] == state) * 50.0
         if name:
-            score += (self._hash_country_prefix3[pool] == self._key(country, name[:3])) * 20.0
+            prefix_hash = np.uint64(
+                pd.util.hash_pandas_object(
+                    pd.DataFrame({"c": [country], "v": [name[:3]]}), index=False
+                ).iloc[0]
+            )
+            score += (self._hash_country_prefix3[pool] == prefix_hash) * 20.0
         score -= np.abs(self.name_len[pool] - len(name)).astype(np.float32) * 0.5
         score -= np.abs(self.addr_len[pool] - len(address)).astype(np.float32) * 0.05
 
