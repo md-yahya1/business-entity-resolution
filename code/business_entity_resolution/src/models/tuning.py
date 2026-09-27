@@ -35,7 +35,7 @@ def optimize_soft_weights(
     y_true: np.ndarray,
     *,
     target_metric: str = "f0_5",
-    n_random_restarts: int = 20,
+    n_random_restarts: int = 8,
     random_state: int = 42,
 ) -> np.ndarray:
     """
