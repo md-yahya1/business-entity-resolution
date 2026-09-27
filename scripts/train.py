@@ -41,13 +41,13 @@ def main():
     parser.add_argument(
         "--max-positives",
         type=int,
-        default=10000,
+        default=800000,
         help="Maximum positive ground truth pairs to sample"
     )
     parser.add_argument(
         "--max-negatives",
         type=int,
-        default=30000,
+        default=900000,
         help="Maximum candidate negative pairs to sample"
     )
     parser.add_argument(
@@ -62,6 +62,18 @@ def main():
         default="under_1h",
         choices=("under_1h", "full", "fast"),
         help="under_1h = single compact HGB for 1M+ rows; fast = core ensembles; full = all stacks including extended weight tuning",
+    )
+    parser.add_argument(
+        "--max-block-size",
+        type=int,
+        default=500,
+        help="Maximum records retained in each blocking bucket",
+    )
+    parser.add_argument(
+        "--max-candidates-per-s1",
+        type=int,
+        default=120,
+        help="Maximum hard-negative candidates considered per S1 entity",
     )
     parser.add_argument(
         "--skip-feature-cache-write",
@@ -112,7 +124,9 @@ def main():
             s1, s2, s3, gt_sample,
             max_positives=args.max_positives,
             max_negatives=args.max_negatives,
-            random_seed=args.random_seed
+            random_seed=args.random_seed,
+            max_block_size=args.max_block_size,
+            max_candidates_per_s1=args.max_candidates_per_s1,
         )
 
         print("Extracting similarity comparison features...")
