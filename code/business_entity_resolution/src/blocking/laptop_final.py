@@ -1,15 +1,11 @@
 """Compact, deterministic candidate retrieval for full laptop-scale inference."""
 from __future__ import annotations
 
-import json
-import os
 import time
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from rapidfuzz import fuzz
-
 from ..preprocessing import extract_address_hints, preprocess_dataframe
 
 STOP = {
@@ -71,7 +67,7 @@ class PostingIndex:
 class CompactCandidateIndex:
     """Sorted uint64 hash postings; no per-key Python list/dict objects."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self, s2_df: pd.DataFrame, s3_df: pd.DataFrame,
                  posting_cap: int = 64, exact_cap: int = 32):
@@ -93,6 +89,9 @@ class CompactCandidateIndex:
         self.house = np.array([h["house_number"] for h in hints], dtype=object)
         self.city = np.array([h["city"] for h in hints], dtype=object)
         self.state = np.array([h["state"] for h in hints], dtype=object)
+        self.address_token = np.array(
+            [selective_token(x) for x in self.addresses], dtype=object
+        )
 
         n = len(s)
         rows = np.arange(n, dtype=np.int32)
@@ -117,6 +116,12 @@ class CompactCandidateIndex:
         self.city_index = PostingIndex.build(
             _hash_keys(self.countries, self.city), rows, posting_cap
         )
+        # Address-token blocking is a cheap second identity signal. It helps
+        # recover records whose business names changed substantially but whose
+        # location text still shares a distinctive token.
+        self.address_token_index = PostingIndex.build(
+            _hash_keys(self.countries, self.address_token), rows, posting_cap
+        )
 
         self._hash_country_name = _hash_keys(self.countries, self.names)
         self._hash_country_prefix3 = _hash_keys(
@@ -125,6 +130,9 @@ class CompactCandidateIndex:
         self._hash_country_postal = _hash_keys(self.countries, self.postal)
         self._hash_country_house = _hash_keys(self.countries, self.house)
         self._hash_country_city = _hash_keys(self.countries, self.city)
+        self._hash_country_address_token = _hash_keys(
+            self.countries, self.address_token
+        )
         self._hash_country_state = _hash_keys(self.countries, self.state)
 
         self.n = n
@@ -137,11 +145,11 @@ class CompactCandidateIndex:
             return np.empty(0, np.int32)
 
         if hashes is None:
-            values = np.array([name, name[:3], selective_token(name), postal, house, city], dtype=object)
+            values = np.array([name, name[:3], selective_token(name), postal, house, city, selective_token(address)], dtype=object)
             hashes = pd.util.hash_pandas_object(
                 pd.DataFrame({"c": np.repeat(country, len(values)), "v": values}), index=False
             ).to_numpy(dtype=np.uint64)
-        h_name, h_prefix, h_token, h_postal, h_house, h_city = hashes
+        h_name, h_prefix, h_token, h_postal, h_house, h_city, h_address_token = hashes
         blocks = []
         if name:
             blocks.append(self.exact_name.lookup(h_name))
@@ -155,6 +163,9 @@ class CompactCandidateIndex:
             blocks.append(self.house_index.lookup(h_house))
         if city:
             blocks.append(self.city_index.lookup(h_city))
+        address_token = selective_token(address)
+        if address_token:
+            blocks.append(self.address_token_index.lookup(h_address_token))
 
         blocks = [x for x in blocks if len(x)]
         if not blocks:
@@ -169,17 +180,14 @@ class CompactCandidateIndex:
         cn = self.countries[pool]
         score += (cn == country) * 1000.0
         score += (self.names[pool] == name) * 500.0
+        score += (self.addresses[pool] == address) * 400.0
         score += (self.postal[pool] == postal) * 250.0
         score += (self.house[pool] == house) * 150.0
         score += (self.city[pool] == city) * 100.0
+        score += (self.address_token[pool] == address_token) * 120.0
         score += (self.state[pool] == state) * 50.0
         if name:
-            prefix_hash = np.uint64(
-                pd.util.hash_pandas_object(
-                    pd.DataFrame({"c": [country], "v": [name[:3]]}), index=False
-                ).iloc[0]
-            )
-            score += (self._hash_country_prefix3[pool] == prefix_hash) * 20.0
+            score += (self._hash_country_prefix3[pool] == h_prefix) * 20.0
         score -= np.abs(self.name_len[pool] - len(name)).astype(np.float32) * 0.5
         score -= np.abs(self.addr_len[pool] - len(address)).astype(np.float32) * 0.05
 
