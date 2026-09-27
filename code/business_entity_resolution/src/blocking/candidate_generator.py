@@ -1,3 +1,5 @@
+import pandas as pd
+
 def generate_candidate_pairs(
     s1_df: pd.DataFrame,
     s2_df: pd.DataFrame,
