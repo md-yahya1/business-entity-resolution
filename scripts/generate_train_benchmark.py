@@ -98,7 +98,8 @@ def main():
                     q["postal"][i], q["house"][i], q["city"][i], q["state"][i],
                     limit=10,
                     hashes=(h_name[i-base], h_prefix[i-base], h_token[i-base],
-                            h_postal[i-base], h_house[i-base], h_city[i-base], h_address_token[i-base]),
+                            h_postal[i-base], h_house[i-base], h_city[i-base], h_address_token[i-base],
+                            h_address[i-base], h_postal_house[i-base]),
                 )
                 cands = cands.tolist()
                 candidate_lists.append(cands)
