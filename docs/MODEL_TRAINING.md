@@ -2,79 +2,105 @@
 
 ## Purpose
 
-Train a binary classifier that estimates whether two records in a generated pair refer to the same business. The training implementation is in `code/business_entity_resolution/src/models/train.py`; the CLI is `scripts/train.py`.
+The final laptop inference pipeline uses an already-trained binary classifier to score candidate pairs. Training is a separate stage; changing the inference blocker does not retrain the model.
 
-## Inputs
+The saved production artifact is:
 
-Training consumes a candidate-pair table with source attributes, `label`, and `entity_group_id`. If the configured feature file exists, the CLI reads it as Parquet or TSV. Otherwise it tries to build pairs from `dataset/train/train_source{1,2,3}.tsv` and `dataset/train/train_ground_truth.tsv` (note the singular legacy path). The source files in this workspace are under `datasets/train/`.
+`models/laptop_final/entity_resolution_model.joblib`
 
-Default command:
+Metadata:
 
-```bash
-python scripts/train.py --input artifacts/candidates/training_features.parquet --output models/entity_resolution_model.joblib
-```
+`models/laptop_final/model_metadata.json`
 
-When the feature file is missing, the script samples up to 10,000 positive ground-truth anchors and 30,000 negatives by default, with random seed 42. It extracts features and writes the generated table before splitting. The fallback data directory is hard-coded; the script does not currently expose a `--train-dir` option.
+## Saved model
 
-## Feature Input
+Model type:
 
-The model consumes these 19 comparison features, in the order recorded by `models/model_metadata.json`:
+`HistGradientBoostingClassifier`
 
-`name_ratio`, `name_partial_ratio`, `name_token_sort_ratio`, `name_token_set_ratio`, `name_jw_similarity`, `address_ratio`, `address_partial_ratio`, `address_token_set_ratio`, `address_jw_similarity`, `country_exact_match`, `country_missing`, `name_exact_match`, `address_exact_match`, `name_token_overlap`, `address_token_overlap`, `name_char_len_diff`, `address_char_len_diff`, `name_missing`, `address_missing`.
+The saved model consumes 13 features:
 
-Pair IDs, source strings, labels, and group IDs are not model features.
+1. `name_ratio`
+2. `name_token_set_ratio`
+3. `address_ratio`
+4. `address_token_set_ratio`
+5. `country_exact_match`
+6. `name_exact_match`
+7. `address_exact_match`
+8. `city_exact_match`
+9. `postal_exact_match`
+10. `house_number_exact_match`
+11. `state_exact_match`
+12. `name_char_len_diff`
+13. `address_char_len_diff`
 
-## Split and Model Selection
+Feature order must remain identical to `model_metadata.json`.
 
-`split_data_by_group` uses `GroupShuffleSplit` on `entity_group_id` to create train, validation, and test portions. The training code compares Logistic Regression, Random Forest, and Gradient Boosting. It tunes a threshold on validation pairwise predictions for F1, chooses the model with highest validation F1, then reports pairwise metrics on the test portion.
+## Saved validation metrics
 
-This objective differs from the entity-level competition score. A strong pairwise result does not imply a strong per-Source-1 macro score, particularly for singletons or records with multiple true matches.
-
-## Checked-In Model Snapshot
-
-Current GitHub `main` metadata identifies a `HistGradientBoosting` model with `max_iter=250`, `max_depth=8`, `learning_rate=0.08`, and `random_state=42`. Its stored decision threshold is `0.62`. The trainer compares six base learners plus soft voting, stacking, and validation-tuned weighted ensembles. Model selection uses a validation composite (50% pairwise F0.5, 30% F1, 20% ROC-AUC) with a fine-grained threshold sweep. Use `python scripts/train.py --tuning-profile full` for every ensemble; `fast` skips the heaviest stacks for quicker iteration.
-
-The metadata reports these pairwise test metrics:
+The current saved model metadata reports:
 
 | Metric | Value |
 |---|---:|
-| Precision | 0.9989 |
-| Recall | 0.9984 |
-| F1 | 0.9987 |
-| Accuracy | 0.9978 |
-| ROC-AUC | 0.9999 |
-| PR-AUC | 1.0000 |
+| Precision | 99.6730% |
+| Recall | 98.4657% |
+| F0.5 | 99.4292% |
+| F1 | 99.0657% |
+| Accuracy | 98.9800% |
 
-These values are from the saved model metadata; they are pairwise metrics, not macro entity-level $F_{0.5}$ and not a newly computed leaderboard result.
+These are **pairwise validation metrics** for candidate pairs. They are not the final entity-level challenge score.
 
-## Competition Metric and Score Status
+The saved decision threshold is:
 
-For each Source 1 entity, compare the set of predicted IDs to its ground-truth set. Compute precision and recall for that entity, then:
+`0.8900000000000003`
 
-$$F_{0.5} = \frac{1.25 \times P \times R}{0.25 \times P + R}$$
+## Inference decision
 
-The final score is the arithmetic mean over every Source 1 entity. A true singleton with no predicted matches scores 1; a singleton with any predicted match scores 0. The metric is precision-weighted because false merges are costly.
+For each Source-1 entity:
 
-The last user-reported overall score is **0.056**. The checked-in `output/matching_results.tsv` contains only a partial set of IDs, and the evaluation source files and labels are not present under `datasets/test`; therefore no new overall macro $F_{0.5}$ score can be computed from this checkout. The local 95.1% candidate recall measurement and the pairwise F1 above are not final scores.
+1. retrieve up to 10 candidates
+2. bypass ML only for a unique exact normalized-name candidate
+3. compute the 13 trained features for the remaining candidates
+4. obtain match probabilities from the saved classifier
+5. apply entity-level decision rules
+6. write the accepted IDs
 
-`scripts/tune_threshold_f0_5.py` can sweep thresholds against the entity-level metric, but its default procedure rebuilds candidate pairs from the supplied training directory. It should be treated as exploratory unless the evaluated entities are held out from model training and threshold selection.
+Current entity decision parameters:
 
-## Artifacts
+- match threshold: saved model threshold
+- no-match maximum probability: 0.42
+- minimum single-match margin: 0.06
+- minimum confident single match: 0.88
 
-Training writes the following files under the output model directory:
+These rules are inference-time behavior. They do not modify model weights.
 
-- `entity_resolution_model.joblib`: serialized classifier
-- `feature_config.json`: ordered feature names and count
-- `model_metadata.json`: model name, hyperparameters, pairwise metrics, threshold, seed, and package versions
+## Important metric distinction
 
-## Inference and Tests
+A pairwise precision near 99% does **not** imply a 99% end-to-end entity-resolution score.
 
-For a precomputed feature table, `scripts/predict.py` writes detailed pair predictions. For grouped submission files covering every Source 1 ID, use `scripts/generate_submission.py`; see [Candidate Generation](CANDIDATE_GENERATION.md).
+The final entity score depends on:
 
-Run `pytest tests/test_pipeline.py` for training, grouped split, threshold, and artifact tests. Run the full suite with `pytest tests/`.
+`blocking recall -> candidate ranking -> pairwise classifier -> entity decision`
 
-## Limitations
+If blocking misses a true match, the classifier never sees it. Therefore candidate recall must be measured separately.
 
-- Model selection tunes pairwise F1 rather than macro entity-level $F_{0.5}$.
-- The training fallback uses a singular `dataset/` path, while the workspace data directory is `datasets/`.
-- Reproducible leaderboard scoring requires the official evaluation labels and full evaluation source files, which are not present in this checkout.
+## No retraining in the final tuning pass
+
+The current optimization work is inference-only:
+
+- improve deterministic candidate recall
+- fix parsing/indexing bugs
+- preserve the 13-feature model interface
+- preserve the saved model
+- keep retrieval small enough for the laptop runtime target
+
+Retraining is not required for these changes.
+
+## Tests
+
+```powershell
+pytest tests/test_pipeline.py -q
+pytest tests/ -q
+```
+
+For the actual final pipeline, use the training benchmark described in [Final Inference](FINAL_INFERENCE.md).
