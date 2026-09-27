@@ -67,7 +67,7 @@ class PostingIndex:
 class CompactCandidateIndex:
     """Sorted uint64 hash postings; no per-key Python list/dict objects."""
 
-    VERSION = 3
+    VERSION = 2
 
     def __init__(self, s2_df: pd.DataFrame, s3_df: pd.DataFrame,
                  posting_cap: int = 64, exact_cap: int = 32):
@@ -122,17 +122,6 @@ class CompactCandidateIndex:
         self.address_token_index = PostingIndex.build(
             _hash_keys(self.countries, self.address_token), rows, posting_cap
         )
-        # Exact address is a strong identity signal when the business name changed.
-        self.address_exact_index = PostingIndex.build(
-            _hash_keys(self.countries, self.addresses), rows, exact_cap
-        )
-        # Postal + house is a cheap complementary location key.
-        self.postal_house_index = PostingIndex.build(
-            _hash_keys(
-                self.countries,
-                np.array([p + "|" + h for p, h in zip(self.postal, self.house)], dtype=object),
-            ), rows, posting_cap
-        )
 
         self._hash_country_name = _hash_keys(self.countries, self.names)
         self._hash_country_prefix3 = _hash_keys(
@@ -143,11 +132,6 @@ class CompactCandidateIndex:
         self._hash_country_city = _hash_keys(self.countries, self.city)
         self._hash_country_address_token = _hash_keys(
             self.countries, self.address_token
-        )
-        self._hash_country_address = _hash_keys(self.countries, self.addresses)
-        self._hash_country_postal_house = _hash_keys(
-            self.countries,
-            np.array([p + "|" + h for p, h in zip(self.postal, self.house)], dtype=object),
         )
         self._hash_country_state = _hash_keys(self.countries, self.state)
 
@@ -161,14 +145,11 @@ class CompactCandidateIndex:
             return np.empty(0, np.int32)
 
         if hashes is None:
-            values = np.array([
-                name, name[:3], selective_token(name), postal, house, city,
-                selective_token(address), address, postal + "|" + house
-            ], dtype=object)
+            values = np.array([name, name[:3], selective_token(name), postal, house, city, selective_token(address)], dtype=object)
             hashes = pd.util.hash_pandas_object(
                 pd.DataFrame({"c": np.repeat(country, len(values)), "v": values}), index=False
             ).to_numpy(dtype=np.uint64)
-        h_name, h_prefix, h_token, h_postal, h_house, h_city, h_address_token, h_address, h_postal_house = hashes
+        h_name, h_prefix, h_token, h_postal, h_house, h_city, h_address_token = hashes
         blocks = []
         if name:
             blocks.append(self.exact_name.lookup(h_name))
@@ -185,10 +166,6 @@ class CompactCandidateIndex:
         address_token = selective_token(address)
         if address_token:
             blocks.append(self.address_token_index.lookup(h_address_token))
-        if address:
-            blocks.append(self.address_exact_index.lookup(h_address))
-        if postal and house:
-            blocks.append(self.postal_house_index.lookup(h_postal_house))
 
         blocks = [x for x in blocks if len(x)]
         if not blocks:
