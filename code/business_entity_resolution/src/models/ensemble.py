@@ -342,13 +342,25 @@ def build_candidate_models(seed: int, profile: str = "full") -> Dict[str, BaseEs
       - \"full\": every ensemble, including extended weight tuning (highest compute)
     """
     if profile == "under_1h":
-        # Accuracy/speed profile for very large datasets (~1M+ rows).
-        # Keep the model family small enough to train under a one-hour budget.
+        # Single compact HGB for 1M+ pair datasets.  The previous profile
+        # trained four HGB variants plus a voting ensemble, which repeatedly
+        # fit the same large matrix and made the one-hour target unreliable.
+        # A single regularized HGB keeps the full training matrix while
+        # reducing histogram bins/iterations and relying on early stopping.
         return {
-            "HistGradientBoosting": _hist_gradient_boosting(seed),
-            "HistGradientBoostingPrecision": _hist_gradient_boosting_precision(seed),
-            "HistGradientBoostingRecall": _hist_gradient_boosting_recall(seed),
-            "HGBVotingEnsemble": build_hgb_voting_ensemble(seed),
+            "HistGradientBoosting": HistGradientBoostingClassifier(
+                max_iter=160,
+                max_leaf_nodes=31,
+                max_depth=8,
+                learning_rate=0.08,
+                min_samples_leaf=20,
+                l2_regularization=0.15,
+                max_bins=63,
+                early_stopping=True,
+                validation_fraction=0.08,
+                n_iter_no_change=12,
+                random_state=seed,
+            ),
         }
 
     if profile == "minimal":
