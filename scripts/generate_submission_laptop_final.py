@@ -104,7 +104,7 @@ def main():
     ap.add_argument(
         "--retrieval-limit",
         type=int,
-        default=20,
+        default=10,
         help="internal candidates scored per entity; output remains <=10",
     )
     ap.add_argument(
@@ -240,11 +240,6 @@ def main():
                 cc,
                 q["city"][base:end],
             )
-            h_state = _hash_keys(
-                cc,
-                q["state"][base:end],
-            )
-
             all_pairs = []
             candidate_lists = []
             direct = {}
@@ -268,7 +263,6 @@ def main():
                         h_postal[i - base],
                         h_house[i - base],
                         h_city[i - base],
-                        h_state[i - base],
                     ),
                 )
 
