@@ -89,6 +89,9 @@ def build_features(q, base, li, ri, index):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default="dataset/test")
+    ap.add_argument("--source1-file", default="test_source1.tsv")
+    ap.add_argument("--source2-file", default="test_source2.tsv")
+    ap.add_argument("--source3-file", default="test_source3.tsv")
     ap.add_argument("--model-dir", default="models/laptop_final")
     ap.add_argument("--output-dir", default="output/laptop_final")
     ap.add_argument("--chunk-size", type=int, default=5000)
@@ -115,15 +118,15 @@ def main():
     t0 = time.time()
 
     s1 = pd.read_csv(
-        os.path.join(args.data_dir, "test_source1.tsv"),
+        os.path.join(args.data_dir, args.source1_file),
         sep="\t",
     )
     s2 = pd.read_csv(
-        os.path.join(args.data_dir, "test_source2.tsv"),
+        os.path.join(args.data_dir, args.source2_file),
         sep="\t",
     )
     s3 = pd.read_csv(
-        os.path.join(args.data_dir, "test_source3.tsv"),
+        os.path.join(args.data_dir, args.source3_file),
         sep="\t",
     )
     print(
