@@ -75,24 +75,26 @@ def prepare_s1(df):
 
 
 def build_features(q, base, li, ri, index):
+    # Keep the hot path in NumPy/RapidFuzz. The previous implementation
+    # created Python lists for every feature column and every candidate pair.
+    # With millions of test entities, that Python allocation overhead is
+    # significant.
     return compute_final_features(
-        [q["name"][base + i] for i in li],
-        [q["address"][base + i] for i in li],
-        [q["country"][base + i] for i in li],
-        [q["postal"][base + i] for i in li],
-        [q["house"][base + i] for i in li],
-        [q["city"][base + i] for i in li],
-        [q["state"][base + i] for i in li],
-        index.names[ri].tolist(),
-        index.addresses[ri].tolist(),
-        index.countries[ri].tolist(),
-        index.postal[ri].tolist(),
-        index.house[ri].tolist(),
-        index.city[ri].tolist(),
-        index.state[ri].tolist(),
+        q["name"][base + li],
+        q["address"][base + li],
+        q["country"][base + li],
+        q["postal"][base + li],
+        q["house"][base + li],
+        q["city"][base + li],
+        q["state"][base + li],
+        index.names[ri],
+        index.addresses[ri],
+        index.countries[ri],
+        index.postal[ri],
+        index.house[ri],
+        index.city[ri],
+        index.state[ri],
     )
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default="dataset/test")
