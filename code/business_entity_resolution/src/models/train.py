@@ -106,10 +106,10 @@ def get_model_hyperparams(model: Any) -> Dict[str, Any]:
 def train_and_evaluate_models(
     split_data: Dict[str, Any],
     random_seed: int = 42,
-    tuning_profile: str = "fast",
+    tuning_profile: str = "full",
 ) -> Dict[str, Any]:
     """
-    Train and compare base learners plus ensemble compositions; select by validation F0.5 composite score.
+    Train and compare diverse base learners plus tuned ensemble compositions; select by leakage-safe validation entity F0.5.
     """
     X_train, y_train = split_data["X_train"], split_data["y_train"]
     X_val, y_val = split_data["X_val"], split_data["y_val"]
