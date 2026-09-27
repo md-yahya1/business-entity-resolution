@@ -7,7 +7,7 @@ import joblib
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "code")))
 from business_entity_resolution.src.preprocessing import preprocess_dataframe, extract_address_hints
-from business_entity_resolution.src.blocking.laptop_final import build_index
+from business_entity_resolution.src.blocking.laptop_final import build_index, _hash_keys, selective_token
 from business_entity_resolution.src.features.laptop_final_features import compute_final_features
 from business_entity_resolution.src.evaluation.entity_decision import select_entity_matches
 
@@ -23,6 +23,8 @@ def prepare_s1(df):
         "house": np.array([h["house_number"] for h in hints], dtype=object),
         "city": np.array([h["city"] for h in hints], dtype=object),
         "state": np.array([h["state"] for h in hints], dtype=object),
+        "prefix3": np.array([x[:3] for x in s.business_name_normalized.fillna("").astype(str)], dtype=object),
+        "token": np.array([selective_token(x) for x in s.business_name_normalized.fillna("").astype(str)], dtype=object),
     }
 
 def main():
@@ -68,6 +70,14 @@ def main():
         for base in range(0, total, args.chunk_size):
             end = min(base + args.chunk_size, total)
             ct = time.time()
+            # Hash all query keys once per chunk; candidate lookups then use only binary search.
+            cc = q["country"][base:end]
+            h_name = _hash_keys(cc, q["name"][base:end])
+            h_prefix = _hash_keys(cc, q["prefix3"][base:end])
+            h_token = _hash_keys(cc, q["token"][base:end])
+            h_postal = _hash_keys(cc, q["postal"][base:end])
+            h_house = _hash_keys(cc, q["house"][base:end])
+            h_city = _hash_keys(cc, q["city"][base:end])
             all_pairs = []
             candidate_lists = []
             direct = {}
@@ -76,7 +86,9 @@ def main():
                 cands = index.candidates(
                     q["country"][i], q["name"][i], q["address"][i],
                     q["postal"][i], q["house"][i], q["city"][i], q["state"][i],
-                    limit=10
+                    limit=10,
+                    hashes=(h_name[i-base], h_prefix[i-base], h_token[i-base],
+                            h_postal[i-base], h_house[i-base], h_city[i-base]),
                 )
                 cands = cands.tolist()
                 candidate_lists.append(cands)
