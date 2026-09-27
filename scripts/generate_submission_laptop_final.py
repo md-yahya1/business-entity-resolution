@@ -1,4 +1,4 @@
-"""Final compact inference: adaptive candidate retrieval + batched ML."""
+"""Final compact inference: multi-pass blocking + batched ML."""
 from __future__ import annotations
 
 import argparse
@@ -61,6 +61,13 @@ def prepare_s1(df):
             [
                 selective_token(x)
                 for x in s.business_name_normalized.fillna("").astype(str)
+            ],
+            dtype=object,
+        ),
+        "address_token": np.array(
+            [
+                selective_token(x)
+                for x in s.business_address_normalized.fillna("").astype(str)
             ],
             dtype=object,
         ),
@@ -240,6 +247,10 @@ def main():
                 cc,
                 q["city"][base:end],
             )
+            h_address_token = _hash_keys(
+                cc,
+                q["address_token"][base:end],
+            )
             all_pairs = []
             candidate_lists = []
             direct = {}
@@ -263,6 +274,7 @@ def main():
                         h_postal[i - base],
                         h_house[i - base],
                         h_city[i - base],
+                        h_address_token[i - base],
                     ),
                 )
 
