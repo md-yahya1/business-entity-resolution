@@ -77,6 +77,8 @@ class FastCandidateIndex:
         # 3. Country fallback index: country -> list[int]
         self.prefix_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
         self.prefix2_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+        self.exact_name_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+        self.exact_name_global_index: Dict[str, List[int]] = defaultdict(list)
         self.token_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
         self.postal_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
         self.house_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
@@ -88,6 +90,14 @@ class FastCandidateIndex:
             c = self.countries[idx]
             name = self.names[idx]
             addr = self.addresses[idx]
+
+            # Keep exact-name indexes even when country is missing. Exact normalized
+            # names are a high-recall, low-cost signal and avoid losing entities
+            # simply because one source has a blank country field.
+            if name:
+                self.exact_name_global_index[name].append(idx)
+            if c and name:
+                self.exact_name_index[(c, name)].append(idx)
 
             if not c:
                 continue
@@ -136,12 +146,34 @@ class FastCandidateIndex:
         top_k: int = 40,
     ) -> List[int]:
         """Union multiple blocking keys, then rank down to top_k."""
-        if not country:
-            return []
-
         seen: Set[int] = set()
         pool: Set[int] = set()
         hints = extract_address_hints(address)
+
+        # Exact normalized-name retrieval is deliberately done before fuzzy
+        # blocking. It is cheap and protects high-confidence matches from being
+        # pushed out of the top-k by noisy prefix/token blocks.
+        if name:
+            self._add_block(seen, pool, name, self.exact_name_global_index)
+            if country:
+                self._add_block(seen, pool, (country, name), self.exact_name_index)
+
+        # If country is missing, continue with global exact-name candidates rather
+        # than returning an empty candidate set. Country-aware blocks remain the
+        # preferred path whenever country is available.
+        if not country:
+            if pool:
+                scored = [
+                    (
+                        idx,
+                        0.60 * fuzz.token_set_ratio(name, self.names[idx])
+                        + 0.40 * fuzz.token_set_ratio(address, self.addresses[idx]),
+                    )
+                    for idx in pool
+                ]
+                scored.sort(key=lambda x: (-x[1], self.ids[x[0]]))
+                return [idx for idx, _ in scored[:top_k]]
+            return []
 
         if len(name) >= 3:
             self._add_block(seen, pool, (country, name[:3]), self.prefix_index)
@@ -171,19 +203,23 @@ class FastCandidateIndex:
         if not pool:
             return []
 
-        scored = [
-            (
-                idx,
-                max(
-                    fuzz.token_set_ratio(name, self.names[idx]),
-                    fuzz.token_sort_ratio(name, self.names[idx]),
-                    fuzz.partial_ratio(name, self.names[idx]),
-                    fuzz.token_set_ratio(address, self.addresses[idx]),
-                    fuzz.partial_ratio(address, self.addresses[idx]),
-                ),
+        scored = []
+        for idx in pool:
+            name_score = max(
+                fuzz.token_set_ratio(name, self.names[idx]),
+                fuzz.token_sort_ratio(name, self.names[idx]),
+                fuzz.partial_ratio(name, self.names[idx]),
             )
-            for idx in pool
-        ]
+            address_score = max(
+                fuzz.token_set_ratio(address, self.addresses[idx]),
+                fuzz.partial_ratio(address, self.addresses[idx]),
+            )
+            # Prefer candidates supported by both fields instead of allowing a
+            # very similar address alone to outrank a strong name+address match.
+            combined = 0.60 * name_score + 0.40 * address_score
+            if name and name == self.names[idx]:
+                combined += 25.0
+            scored.append((idx, combined))
         scored.sort(key=lambda x: (-x[1], self.ids[x[0]]))
         return [idx for idx, _ in scored[:top_k]]
 
