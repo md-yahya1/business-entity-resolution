@@ -80,6 +80,14 @@ def main():
             h_house = _hash_keys(cc, q["house"][base:end])
             h_city = _hash_keys(cc, q["city"][base:end])
             h_address_token = _hash_keys(cc, q["address_token"][base:end])
+            h_address = _hash_keys(cc, q["address"][base:end])
+            h_postal_house = _hash_keys(
+                cc,
+                np.array(
+                    [p + "|" + h for p, h in zip(q["postal"][base:end], q["house"][base:end])],
+                    dtype=object,
+                ),
+            )
             all_pairs = []
             candidate_lists = []
             direct = {}
