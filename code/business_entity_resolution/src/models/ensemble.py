@@ -41,8 +41,8 @@ class BaseLearnerSpec:
 
 def _hist_gradient_boosting(seed: int) -> HistGradientBoostingClassifier:
     return HistGradientBoostingClassifier(
-        max_iter=450,
-        max_depth=12,
+        max_iter=350,
+        max_depth=10,
         learning_rate=0.045,
         min_samples_leaf=6,
         l2_regularization=0.08,
@@ -53,8 +53,8 @@ def _hist_gradient_boosting(seed: int) -> HistGradientBoostingClassifier:
 
 def _hist_gradient_boosting_alt(seed: int) -> HistGradientBoostingClassifier:
     return HistGradientBoostingClassifier(
-        max_iter=520,
-        max_depth=9,
+        max_iter=400,
+        max_depth=8,
         learning_rate=0.035,
         min_samples_leaf=4,
         l2_regularization=0.04,
@@ -66,8 +66,8 @@ def _hist_gradient_boosting_alt(seed: int) -> HistGradientBoostingClassifier:
 def _hist_gradient_boosting_precision(seed: int) -> HistGradientBoostingClassifier:
     """Higher-regularization HGB variant aimed at reducing false positives."""
     return HistGradientBoostingClassifier(
-        max_iter=700,
-        max_depth=8,
+        max_iter=450,
+        max_depth=7,
         learning_rate=0.025,
         min_samples_leaf=10,
         l2_regularization=0.20,
@@ -79,8 +79,8 @@ def _hist_gradient_boosting_precision(seed: int) -> HistGradientBoostingClassifi
 def _hist_gradient_boosting_recall(seed: int) -> HistGradientBoostingClassifier:
     """Slightly more expressive HGB variant to preserve hard positives."""
     return HistGradientBoostingClassifier(
-        max_iter=600,
-        max_depth=10,
+        max_iter=420,
+        max_depth=9,
         learning_rate=0.035,
         min_samples_leaf=5,
         l2_regularization=0.06,
@@ -91,8 +91,8 @@ def _hist_gradient_boosting_recall(seed: int) -> HistGradientBoostingClassifier:
 
 def _extra_trees(seed: int) -> ExtraTreesClassifier:
     return ExtraTreesClassifier(
-        n_estimators=500,
-        max_depth=20,
+        n_estimators=220,
+        max_depth=18,
         min_samples_leaf=2,
         class_weight="balanced",
         random_state=seed,
@@ -102,8 +102,8 @@ def _extra_trees(seed: int) -> ExtraTreesClassifier:
 
 def _random_forest(seed: int) -> RandomForestClassifier:
     return RandomForestClassifier(
-        n_estimators=400,
-        max_depth=20,
+        n_estimators=180,
+        max_depth=18,
         min_samples_leaf=2,
         class_weight="balanced",
         random_state=seed,
@@ -113,7 +113,7 @@ def _random_forest(seed: int) -> RandomForestClassifier:
 
 def _gradient_boosting(seed: int) -> GradientBoostingClassifier:
     return GradientBoostingClassifier(
-        n_estimators=350,
+        n_estimators=220,
         max_depth=5,
         learning_rate=0.035,
         subsample=0.85,
@@ -141,7 +141,7 @@ def _logistic_regression(seed: int) -> Pipeline:
 def _ada_boost(seed: int) -> AdaBoostClassifier:
     return AdaBoostClassifier(
         estimator=DecisionTreeClassifier(max_depth=4, random_state=seed),
-        n_estimators=150,
+        n_estimators=100,
         learning_rate=0.08,
         random_state=seed,
     )
@@ -323,9 +323,22 @@ def build_candidate_models(seed: int, profile: str = "full") -> Dict[str, BaseEs
 
     profile:
       - \"minimal\": smoke-test subset (pytest only)
+      - \"under_1h\": HGB-focused profile for ~1M+ row datasets
       - \"fast\": core bases + primary ensembles (quicker retrains)
-      - \"full\": every ensemble, including extended weight tuning (best quality)
+      - \"full\": every ensemble, including extended weight tuning (highest compute)
     """
+    if profile == "under_1h":
+        # Accuracy/speed profile for very large datasets (~1M+ rows).
+        # Keep the model family small enough to train under a one-hour budget.
+        return {
+            "HistGradientBoosting": _hist_gradient_boosting(seed),
+            "HistGradientBoostingPrecision": _hist_gradient_boosting_precision(seed),
+            "HistGradientBoostingRecall": _hist_gradient_boosting_recall(seed),
+            "SoftVotingEnsemble": build_soft_voting_ensemble(
+                seed, weights=[0.50, 0.25, 0.25, 0.0, 0.0, 0.0]
+            ),
+        }
+
     if profile == "minimal":
         return {
             "HistGradientBoosting": HistGradientBoostingClassifier(
