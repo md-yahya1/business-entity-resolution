@@ -16,8 +16,8 @@ FEATURE_NAMES_FINAL = [
     "postal_exact_match",
     "house_number_exact_match",
     "state_exact_match",
-    "name_length_difference",
-    "address_length_difference",
+    "name_char_len_diff",
+    "address_char_len_diff",
 ]
 
 def compute_final_features(
