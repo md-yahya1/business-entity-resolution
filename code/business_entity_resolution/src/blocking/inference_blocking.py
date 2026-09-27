@@ -16,9 +16,10 @@ import numpy as np
 import pandas as pd
 import rapidfuzz.fuzz as fuzz
 
-from ..features.pair_features import FEATURE_NAMES, compute_features_batch_fast
+from ..evaluation.entity_decision import select_entity_matches
+from ..features.pair_features import compute_features_batch_fast, align_feature_matrix
 from ..models.predict import load_model_and_config
-from ..preprocessing import normalize_address, normalize_business_name, normalize_country, preprocess_dataframe
+from ..preprocessing import extract_address_hints, preprocess_dataframe
 
 CORPORATE_STOPWORDS: Set[str] = {
     "the", "a", "an", "and", "or", "inc", "incorporated", "llc", "ltd",
@@ -53,7 +54,7 @@ class FastCandidateIndex:
     Uses int32 indices and selective token/prefix blocking for ultra-fast lookup.
     """
 
-    def __init__(self, s2_df: pd.DataFrame, s3_df: pd.DataFrame, max_token_postings: int = 300):
+    def __init__(self, s2_df: pd.DataFrame, s3_df: pd.DataFrame, max_token_postings: int = 2500):
         self.max_token_postings = max_token_postings
 
         print("Preprocessing and indexing Source-2 and Source-3 candidate records...")
@@ -75,7 +76,11 @@ class FastCandidateIndex:
         # 2. Token index: (country, token) -> list[int]
         # 3. Country fallback index: country -> list[int]
         self.prefix_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+        self.prefix2_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
         self.token_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+        self.postal_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+        self.house_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+        self.city_index: Dict[Tuple[str, str], List[int]] = defaultdict(list)
         self.country_index: Dict[str, List[int]] = defaultdict(list)
 
         t0 = time.time()
@@ -89,96 +94,102 @@ class FastCandidateIndex:
 
             self.country_index[c].append(idx)
 
-            # Prefix-3 block on name
             if len(name) >= 3:
                 self.prefix_index[(c, name[:3])].append(idx)
+            if len(name) >= 2:
+                self.prefix2_index[(c, name[:2])].append(idx)
             elif len(name) >= 1:
                 self.prefix_index[(c, name[:1])].append(idx)
 
-            # Selective token blocks on name & address
-            for tok in _extract_selective_tokens(name, max_tokens=3):
+            for tok in _extract_selective_tokens(name, max_tokens=4):
                 postings = self.token_index[(c, tok)]
                 if len(postings) < self.max_token_postings:
                     postings.append(idx)
 
-            for tok in _extract_selective_tokens(addr, max_tokens=2):
+            for tok in _extract_selective_tokens(addr, max_tokens=4):
                 postings = self.token_index[(c, tok)]
                 if len(postings) < self.max_token_postings:
                     postings.append(idx)
+
+            hints = extract_address_hints(addr)
+            if hints["postal_code"]:
+                self.postal_index[(c, hints["postal_code"])].append(idx)
+            if hints["house_number"]:
+                self.house_index[(c, hints["house_number"])].append(idx)
+            if hints["city"]:
+                self.city_index[(c, hints["city"])].append(idx)
 
         t_elapsed = time.time() - t0
         print(f"Inverted index built in {t_elapsed:.2f}s: {len(self.prefix_index):,} prefix blocks, {len(self.token_index):,} token blocks.")
+
+    def _add_block(self, seen: Set[int], pool: Set[int], block_key, index_map: Dict) -> None:
+        for idx in index_map.get(block_key, []):
+            if idx not in seen:
+                seen.add(idx)
+                pool.add(idx)
 
     def get_candidates_for_query(
         self,
         country: str,
         name: str,
         address: str,
+<<<<<<< ours
         top_k: int = 50,
+=======
+        top_k: int = 40,
+>>>>>>> theirs
     ) -> List[int]:
-        """Retrieve candidate integer indices for a single S1 record."""
+        """Union multiple blocking keys, then rank down to top_k."""
         if not country:
             return []
 
-        candidates: List[int] = []
         seen: Set[int] = set()
+        pool: Set[int] = set()
+        hints = extract_address_hints(address)
 
-        # 1. Check exact prefix-3
         if len(name) >= 3:
-            for idx in self.prefix_index.get((country, name[:3]), []):
-                if idx not in seen:
-                    seen.add(idx)
-                    candidates.append(idx)
-                    if len(candidates) >= top_k * 3:
-                        break
+            self._add_block(seen, pool, (country, name[:3]), self.prefix_index)
+        if len(name) >= 2:
+            self._add_block(seen, pool, (country, name[:2]), self.prefix2_index)
         elif len(name) >= 1:
-            for idx in self.prefix_index.get((country, name[:1]), []):
+            self._add_block(seen, pool, (country, name[:1]), self.prefix_index)
+
+        for tok in _extract_selective_tokens(name, max_tokens=4):
+            self._add_block(seen, pool, (country, tok), self.token_index)
+        for tok in _extract_selective_tokens(address, max_tokens=4):
+            self._add_block(seen, pool, (country, tok), self.token_index)
+
+        if hints["postal_code"]:
+            self._add_block(seen, pool, (country, hints["postal_code"]), self.postal_index)
+        if hints["house_number"]:
+            self._add_block(seen, pool, (country, hints["house_number"]), self.house_index)
+        if hints["city"]:
+            self._add_block(seen, pool, (country, hints["city"]), self.city_index)
+
+        if not pool:
+            for idx in self.country_index.get(country, [])[: max(top_k * 5, 100)]:
                 if idx not in seen:
                     seen.add(idx)
-                    candidates.append(idx)
+                    pool.add(idx)
 
-        # 2. Check selective tokens from name & address
-        for tok in _extract_selective_tokens(name, max_tokens=3):
-            for idx in self.token_index.get((country, tok), []):
-                if idx not in seen:
-                    seen.add(idx)
-                    candidates.append(idx)
-                    if len(candidates) >= top_k * 4:
-                        break
+        if not pool:
+            return []
 
-        for tok in _extract_selective_tokens(address, max_tokens=2):
-            for idx in self.token_index.get((country, tok), []):
-                if idx not in seen:
-                    seen.add(idx)
-                    candidates.append(idx)
-                    if len(candidates) >= top_k * 4:
-                        break
-
-        # 3. Fallback to same country if no candidates found
-        if not candidates:
-            pool = self.country_index.get(country, [])
-            for idx in pool[:top_k]:
-                if idx not in seen:
-                    seen.add(idx)
-                    candidates.append(idx)
-
-        # Rank candidates quickly by string similarity if candidates > top_k
-        if len(candidates) > top_k:
-            scored = [
-                (
-                    idx,
-                    max(
-                        fuzz.token_set_ratio(name, self.names[idx]),
-                        fuzz.token_sort_ratio(name, self.names[idx]),
-                        fuzz.token_set_ratio(address, self.addresses[idx]),
-                    )
-                )
-                for idx in candidates
-            ]
-            scored.sort(key=lambda x: -x[1])
-            return [idx for idx, _ in scored[:top_k]]
-
-        return candidates[:top_k]
+        scored = [
+            (
+                idx,
+                max(
+                    fuzz.token_set_ratio(name, self.names[idx]),
+                    fuzz.token_sort_ratio(name, self.names[idx]),
+                    fuzz.partial_ratio(name, self.names[idx]),
+                    fuzz.token_set_ratio(address, self.addresses[idx]),
+                    fuzz.partial_ratio(address, self.addresses[idx]),
+                ),
+            )
+            for idx in pool
+        ]
+        scored.sort(key=lambda x: (-x[1], self.ids[x[0]]))
+        return [idx for idx, _ in scored[:top_k]]
 
 
 def generate_inference_candidates(
@@ -251,8 +262,11 @@ def run_streaming_inference(
     s3_df: pd.DataFrame,
     model_path: str,
     output_dir: str = "output",
-    top_k: int = 25,
+    top_k: int = 40,
     threshold_override: Optional[float] = None,
+    no_match_max_prob: float = 0.42,
+    min_single_match_margin: float = 0.06,
+    min_confident_single_match: float = 0.88,
     chunk_size: int = 50000,
 ) -> Tuple[str, str]:
     """
@@ -267,7 +281,11 @@ def run_streaming_inference(
     model, feature_names, default_thresh = load_model_and_config(model_path)
     threshold = threshold_override if threshold_override is not None else default_thresh
     print(f"Loaded model from {model_path}")
-    print(f"Using decision threshold: {threshold:.4f}")
+    print(f"Using match threshold: {threshold:.4f}")
+    print(
+        f"Entity gates: no_match_max_prob={no_match_max_prob:.2f}, "
+        f"min_single_match_margin={min_single_match_margin:.2f}"
+    )
 
     # Build inverted index once over S2 and S3
     index = FastCandidateIndex(s2_df, s3_df)
@@ -325,11 +343,11 @@ def run_streaming_inference(
             total_pairs = len(pair_s1_indices)
             total_candidates_count += total_pairs
 
-            # Mapping of matches per s1 item in chunk
-            matches_by_s1: Dict[int, List[str]] = defaultdict(list)
+            matches_by_s1: Dict[int, List[str]] = {}
+            probs_by_s1: Dict[int, List[float]] = defaultdict(list)
+            ids_by_s1: Dict[int, List[str]] = defaultdict(list)
 
             if total_pairs > 0:
-                # Build pair arrays for feature extraction (already pre-normalized)
                 n1_batch = [chunk_s1_names[pi] for pi in pair_s1_indices]
                 a1_batch = [chunk_s1_addrs[pi] for pi in pair_s1_indices]
                 c1_batch = [chunk_s1_countries[pi] for pi in pair_s1_indices]
@@ -338,23 +356,32 @@ def run_streaming_inference(
                 a2_batch = [index.addresses[ci] for ci in pair_cand_indices]
                 c2_batch = [index.countries[ci] for ci in pair_cand_indices]
 
-                # Fast vectorized feature computation
                 feat_matrix = compute_features_batch_fast(
                     n1_batch, a1_batch, c1_batch,
                     n2_batch, a2_batch, c2_batch,
                     are_pre_normalized=True,
                 )
+                feat_matrix = align_feature_matrix(feat_matrix, list(feature_names))
 
-                # Predict probabilities
                 probs = model.predict_proba(feat_matrix)[:, 1]
-                is_match = (probs >= threshold)
 
                 for p_idx in range(total_pairs):
-                    if is_match[p_idx]:
-                        s1_local_idx = pair_s1_indices[p_idx]
-                        cand_global_idx = pair_cand_indices[p_idx]
-                        cand_eid = index.ids[cand_global_idx]
-                        matches_by_s1[s1_local_idx].append(cand_eid)
+                    s1_local_idx = pair_s1_indices[p_idx]
+                    cand_global_idx = pair_cand_indices[p_idx]
+                    cand_eid = index.ids[cand_global_idx]
+                    ids_by_s1[s1_local_idx].append(cand_eid)
+                    probs_by_s1[s1_local_idx].append(float(probs[p_idx]))
+
+            for s1_local_idx, cand_ids in ids_by_s1.items():
+                entity_probs = probs_by_s1[s1_local_idx]
+                matches_by_s1[s1_local_idx] = select_entity_matches(
+                    cand_ids,
+                    entity_probs,
+                    match_threshold=threshold,
+                    no_match_max_prob=no_match_max_prob,
+                    min_single_match_margin=min_single_match_margin,
+                    min_confident_single_match=min_confident_single_match,
+                )
 
             # Write chunk results to disk
             chunk_matches = 0

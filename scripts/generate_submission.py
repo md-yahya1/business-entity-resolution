@@ -83,7 +83,29 @@ def main():
     parser.add_argument("--model", default="models/entity_resolution_model.joblib")
     parser.add_argument("--output-dir", default="output")
     parser.add_argument("--threshold", type=float, default=None, help="Override model_metadata.json's decision_threshold")
+<<<<<<< ours
     parser.add_argument("--top-k", type=int, default=50, help="Max blocking candidates per S1 entity")
+=======
+    parser.add_argument("--top-k", type=int, default=40, help="Max blocking candidates per S1 entity")
+    parser.add_argument(
+        "--no-match-max-prob",
+        type=float,
+        default=0.42,
+        help="If best candidate prob is below this, predict no matches (singleton-safe)",
+    )
+    parser.add_argument(
+        "--min-single-match-margin",
+        type=float,
+        default=0.06,
+        help="Drop a lone match when runner-up is within this probability margin",
+    )
+    parser.add_argument(
+        "--min-confident-single-match",
+        type=float,
+        default=0.88,
+        help="Allow ambiguous single matches when prob exceeds this value",
+    )
+>>>>>>> theirs
     parser.add_argument("--chunk-size", type=int, default=50000, help="Number of S1 entities processed per batch")
     parser.add_argument("--prefix", default="", help="File prefix, e.g. 'test_' or 'train_'")
     args = parser.parse_args()
@@ -110,6 +132,9 @@ def main():
         output_dir=args.output_dir,
         top_k=args.top_k,
         threshold_override=args.threshold,
+        no_match_max_prob=args.no_match_max_prob,
+        min_single_match_margin=args.min_single_match_margin,
+        min_confident_single_match=args.min_confident_single_match,
         chunk_size=args.chunk_size,
     )
 

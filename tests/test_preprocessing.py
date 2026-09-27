@@ -6,6 +6,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "code")))
 
 from business_entity_resolution.src.preprocessing import (
+    extract_address_hints,
     normalize_text,
     normalize_business_name,
     normalize_address,
@@ -33,6 +34,13 @@ def test_normalize_address():
 def test_normalize_country():
     assert normalize_country("  US  ") == "us"
     assert normalize_country("India") == "india"
+
+
+def test_extract_address_hints():
+    hints = extract_address_hints("15 harbor street new york ny 10001")
+    assert hints["house_number"] == "15"
+    assert hints["postal_code"] == "10001"
+    assert hints["city"] in {"york", "new", "10001"}
 
 
 def test_preprocess_dataframe():

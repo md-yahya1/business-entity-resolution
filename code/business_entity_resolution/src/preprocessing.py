@@ -1,6 +1,7 @@
 import re
 import unicodedata
 import pandas as pd
+from typing import Dict
 
 
 REQUIRED_COLUMNS = [
@@ -9,6 +10,9 @@ REQUIRED_COLUMNS = [
     "business_address",
     "country",
 ]
+
+_US_ZIP_RE = re.compile(r"\b(\d{5})(?:\s*-\s*(\d{4}))?\b")
+_UK_POSTAL_RE = re.compile(r"\b([a-z]{1,2}\d[a-z\d]?\s*\d[a-z]{2})\b", re.IGNORECASE)
 
 
 def normalize_text(value: object) -> str:
@@ -27,76 +31,84 @@ def normalize_text(value: object) -> str:
 
     value = str(value)
 
-    # Unicode normalization
     value = unicodedata.normalize("NFKC", value)
-
-    # Lowercase
     value = value.lower()
-
-    # Replace punctuation with spaces
     value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
-
-    # Normalize whitespace
     value = re.sub(r"\s+", " ", value)
 
     return value.strip()
 
 
 def normalize_business_name(value: object) -> str:
-    """
-    Normalize a business name while preserving meaningful words.
-    """
+    """Normalize a business name while preserving meaningful words."""
     return normalize_text(value)
 
 
 def normalize_address(value: object) -> str:
-    """
-    Normalize a business address.
-    """
+    """Normalize a business address."""
     if pd.isna(value):
         return ""
 
     value = str(value)
-
-    # Unicode normalization
     value = unicodedata.normalize("NFKC", value)
-
-    # Lowercase
     value = value.lower()
-
-    # Convert common address separators to spaces
     value = re.sub(r"[,;/]+", " ", value)
-
-    # Remove remaining punctuation
     value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
-
-    # Normalize whitespace
     value = re.sub(r"\s+", " ", value)
 
     return value.strip()
 
 
 def normalize_country(value: object) -> str:
-    """
-    Normalize country values.
-    """
+    """Normalize country values."""
     if pd.isna(value):
         return ""
 
     value = str(value)
-
     value = unicodedata.normalize("NFKC", value)
     value = value.strip().lower()
 
     return value
 
 
-def handle_missing_values(df: pd.DataFrame) -> pd.DataFrame:
+def extract_address_hints(normalized_address: str) -> Dict[str, str]:
     """
-    Handle missing values in text columns.
+    Lightweight address parsing for blocking and match features.
+    Works on normalized address strings (lowercase, punctuation stripped).
+    """
+    addr = normalized_address or ""
+    hints = {"house_number": "", "postal_code": "", "city": "", "state": ""}
 
-    Missing text values are converted to empty strings.
-    """
+    zip_match = _US_ZIP_RE.search(addr)
+    if zip_match:
+        hints["postal_code"] = zip_match.group(1)
+    else:
+        uk = _UK_POSTAL_RE.search(addr)
+        if uk:
+            hints["postal_code"] = uk.group(1).replace(" ", "")
+
+    tokens = addr.split()
+    if tokens and re.match(r"^\d+[a-z]?$", tokens[0]):
+        hints["house_number"] = tokens[0]
+
+    if len(tokens) >= 2 and re.match(r"^[a-z]{2}$", tokens[-1]):
+        hints["state"] = tokens[-1]
+        city_tokens = tokens[-3:-1] if len(tokens) >= 3 else tokens[-2:-1]
+    else:
+        city_tokens = tokens[-2:] if len(tokens) >= 2 else tokens[-1:]
+
+    city_tokens = [
+        t for t in city_tokens
+        if t and not t.isdigit() and t not in {"usa", "us", "uk", "in", "india"}
+    ]
+    if city_tokens:
+        hints["city"] = city_tokens[-1]
+
+    return hints
+
+
+def handle_missing_values(df: pd.DataFrame) -> pd.DataFrame:
+    """Missing text values are converted to empty strings."""
     df = df.copy()
 
     text_columns = [
@@ -113,13 +125,9 @@ def handle_missing_values(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Complete preprocessing pipeline for a business entity dataset.
-    """
-
+    """Complete preprocessing pipeline for a business entity dataset."""
     df = df.copy()
 
-    # Validate expected schema
     missing_columns = [
         column
         for column in REQUIRED_COLUMNS
@@ -131,10 +139,8 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             f"Missing required columns: {missing_columns}"
         )
 
-    # Handle missing values
     df = handle_missing_values(df)
 
-    # Create normalized columns
     df["business_name_normalized"] = (
         df["business_name"]
         .apply(normalize_business_name)
