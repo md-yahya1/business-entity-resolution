@@ -300,42 +300,16 @@ def main():
                     for j in cands:
                         all_pairs.append((local, j))
 
-            probs = {}
-
+            # Candidate pairs are appended entity-by-entity, so the
+            # probability vector is already grouped by local entity. Avoid
+            # millions of Python dict/list append operations here.
+            probs = None
             if all_pairs:
-                li = np.fromiter(
-                    (x[0] for x in all_pairs),
-                    dtype=np.int32,
-                )
-                ri = np.fromiter(
-                    (x[1] for x in all_pairs),
-                    dtype=np.int32,
-                )
+                li = np.fromiter((x[0] for x in all_pairs), dtype=np.int32)
+                ri = np.fromiter((x[1] for x in all_pairs), dtype=np.int32)
 
-                X = build_features(
-                    q,
-                    base,
-                    li,
-                    ri,
-                    index,
-                )
-
-                p = model.predict_proba(X)[:, 1]
-
-                for k, (local, j) in enumerate(
-                    all_pairs
-                ):
-                    probs.setdefault(
-                        local,
-                        [],
-                    ).append(
-                        (
-                            index.ids[j],
-                            float(p[k]),
-                            j,
-                        )
-                    )
-
+                X = build_features(q, base, li, ri, index)
+                probs = model.predict_proba(X)[:, 1]
             chunk_matches = 0
 
             for local, i in enumerate(
